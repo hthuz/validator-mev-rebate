@@ -128,6 +128,7 @@ type SimulationWorker struct {
 	store         *BundleStore
 	hintBroadcast HintBroadcaster
 	signer        *ecdsa.PrivateKey
+	metrics       *MetricsStore
 	wg            sync.WaitGroup
 	stopCh        chan struct{}
 }
@@ -139,6 +140,7 @@ func NewSimulationWorker(
 	store *BundleStore,
 	hintBroadcast HintBroadcaster,
 	signer *ecdsa.PrivateKey,
+	metrics *MetricsStore,
 ) *SimulationWorker {
 	return &SimulationWorker{
 		simulator:     simulator,
@@ -146,6 +148,7 @@ func NewSimulationWorker(
 		store:         store,
 		hintBroadcast: hintBroadcast,
 		signer:        signer,
+		metrics:       metrics,
 		stopCh:        make(chan struct{}),
 	}
 }
@@ -219,7 +222,25 @@ func (w *SimulationWorker) process(ctx context.Context, item *BundleQueueItem) e
 		return err
 	}
 
-	// 3. 检查模拟结果
+	// 3. 获取 builder 和 searcher 信息
+	builder := "flashbots"
+	if bundle.Privacy != nil && len(bundle.Privacy.Builders) > 0 {
+		builder = bundle.Privacy.Builders[0]
+	}
+
+	var searcher common.Address
+	if len(bundle.Body) > 0 && bundle.Body[0].Tx != nil {
+		if sender, err := GetTransactionSender(*bundle.Body[0].Tx); err == nil {
+			searcher = sender
+		}
+	}
+
+	// 4. 记录指标 (在检查成功/失败之前，因为要统计两者)
+	if w.metrics != nil {
+		w.metrics.RecordBundleResult(item.TargetBlock, result, builder, searcher)
+	}
+
+	// 5. 检查模拟结果
 	if !result.Success {
 		logger.Warn().
 			Str("bundleHash", bundle.Metadata.BundleHash.Hex()).
@@ -232,10 +253,10 @@ func (w *SimulationWorker) process(ctx context.Context, item *BundleQueueItem) e
 		return nil
 	}
 
-	// 4. 计算并设置 MatchingHash (用于 Hint)
+	// 6. 计算并设置 MatchingHash (用于 Hint)
 	bundle.Metadata.MatchingHash = calculateMatchingHash(bundle.Metadata.BundleHash, w.signer)
 
-	// 5. 提取并广播 Hints
+	// 7. 提取并广播 Hints
 	if bundle.Privacy != nil && bundle.Privacy.Hints != HintNone {
 		hint := ExtractHints(bundle, result)
 		if hint != nil {
@@ -245,10 +266,10 @@ func (w *SimulationWorker) process(ctx context.Context, item *BundleQueueItem) e
 		}
 	}
 
-	// 6. 存储模拟结果
+	// 8. 存储模拟结果
 	w.store.StoreSimResult(bundle.Metadata.BundleHash, result)
 
-	// 7. 发送给 Builder (简化版: 只记录日志)
+	// 9. 发送给 Builder (简化版: 只记录日志)
 	w.sendToBuilders(bundle, result)
 
 	logger.Info().

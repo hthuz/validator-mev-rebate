@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/rs/zerolog"
 )
 
@@ -40,12 +41,13 @@ func main() {
 	queue := NewSimulationQueue()
 	simulator := NewMockSimulator()
 	hintBroadcaster := &LogHintBroadcaster{}
+	metricsStore := NewMetricsStore()
 
 	// 3. 创建 API
 	api := NewMevShareAPI(signer, queue, store, simulator)
 
 	// 4. 创建模拟工作器
-	worker := NewSimulationWorker(simulator, queue, store, hintBroadcaster, signer)
+	worker := NewSimulationWorker(simulator, queue, store, hintBroadcaster, signer, metricsStore)
 
 	// 5. 创建 HTTP 服务器
 	mux := http.NewServeMux()
@@ -54,6 +56,16 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
 	})
+
+	// 添加指标查询端点
+	metricsHandler := NewMetricsHandler(metricsStore)
+	mux.HandleFunc("/metrics/block/", metricsHandler.GetBlockMetrics)
+	mux.HandleFunc("/metrics/validator/", metricsHandler.GetValidatorMetrics)
+	mux.HandleFunc("/metrics/validators", metricsHandler.GetAllValidators)
+	mux.HandleFunc("/metrics/searcher/", metricsHandler.GetSearcherMetrics)
+	mux.HandleFunc("/metrics/searchers", metricsHandler.GetAllSearchers)
+	mux.HandleFunc("/metrics/global", metricsHandler.GetGlobalMetrics)
+	mux.HandleFunc("/metrics/recent", metricsHandler.GetRecentBlocks)
 
 	server := &http.Server{
 		Addr:    ":" + *port,
@@ -68,7 +80,7 @@ func main() {
 	worker.Start(ctx)
 
 	// 启动块号更新 (模拟区块增长)
-	go blockUpdater(ctx, simulator, queue)
+	go blockUpdater(ctx, simulator, queue, metricsStore)
 
 	// 7. 启动 HTTP 服务器
 	go func() {
@@ -101,18 +113,41 @@ func main() {
 }
 
 // blockUpdater 模拟区块增长
-func blockUpdater(ctx context.Context, sim *MockSimulator, queue *SimulationQueue) {
+func blockUpdater(ctx context.Context, sim *MockSimulator, queue *SimulationQueue, metrics *MetricsStore) {
 	ticker := time.NewTicker(12 * time.Second) // 12秒一个块 (以太坊主网)
 	defer ticker.Stop()
+
+	// 模拟验证者地址列表
+	validators := []string{
+		"0x1234567890123456789012345678901234567890",
+		"0xabcdefabcdefabcdefabcdefabcdefabcdefabcd",
+		"0x9876543210987654321098765432109876543210",
+	}
+	validatorIndex := 0
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			newBlock := sim.GetBlock() + 1
+			// 结束上一个区块的指标收集
+			prevBlock := sim.GetBlock()
+			if metrics != nil && prevBlock > 1000000 {
+				metrics.FinalizeBlock(prevBlock, 30000000) // 30M gas limit
+			}
+
+			// 切换到新区块
+			newBlock := prevBlock + 1
 			sim.SetBlock(newBlock)
 			queue.UpdateBlock(newBlock)
+
+			// 开始新区块的指标收集
+			if metrics != nil {
+				validator := common.HexToAddress(validators[validatorIndex%len(validators)])
+				metrics.StartNewBlock(newBlock, validator)
+				validatorIndex++
+			}
+
 			logger.Info().Uint64("block", newBlock).Msg("New block")
 		}
 	}
@@ -128,6 +163,15 @@ func printUsage(port string) {
 	logger.Info().Msg("  - mev_sendBundle    : Submit a bundle")
 	logger.Info().Msg("  - mev_simBundle     : Simulate a bundle")
 	logger.Info().Msg("  - eth_cancelBundleByHash : Cancel a bundle")
+	logger.Info().Msg("")
+	logger.Info().Msg("Metrics Endpoints:")
+	logger.Info().Msg("  GET /metrics/block/{blockNumber}    : 获取指定区块的 MEV 指标")
+	logger.Info().Msg("  GET /metrics/validator/{address}    : 获取指定 Validator 的历史表现")
+	logger.Info().Msg("  GET /metrics/validators             : 获取所有 Validators 的列表")
+	logger.Info().Msg("  GET /metrics/searcher/{address}     : 获取指定 Searcher 的指标")
+	logger.Info().Msg("  GET /metrics/searchers              : 获取所有 Searchers 的列表")
+	logger.Info().Msg("  GET /metrics/global                 : 获取全局 MEV 统计")
+	logger.Info().Msg("  GET /metrics/recent                 : 获取最近区块的指标")
 	logger.Info().Msg("")
 	logger.Info().Msgf("Example: curl -X POST http://localhost:%s \\", port)
 	logger.Info().Msg("  -H 'Content-Type: application/json' \\")

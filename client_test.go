@@ -28,7 +28,8 @@ func TestClient(t *testing.T) {
 	simulator := NewMockSimulator()
 	api := NewMevShareAPI(signer, queue, store, simulator)
 	hintBroadcaster := &LogHintBroadcaster{}
-	worker := NewSimulationWorker(simulator, queue, store, hintBroadcaster, signer)
+	metricsStore := NewMetricsStore()
+	worker := NewSimulationWorker(simulator, queue, store, hintBroadcaster, signer, metricsStore)
 
 	// 启动 worker
 	worker.Start(ctx)
