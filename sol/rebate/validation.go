@@ -142,8 +142,8 @@ func validateBody(body []MevBundleBody, currentSlot uint64, level int) (string, 
 			}
 
 			// 尝试解析为 Solana 交易
-			var tx solana.Transaction
-			if err := tx.UnmarshalWithDecoder(solana.NewBinDecoder(txBytes)); err != nil {
+			tx, err := solana.TransactionFromDecoder(solana.NewBinDecoder(txBytes))
+			if err != nil {
 				return "", false, fmt.Errorf("%w: invalid transaction: %v", ErrInvalidTransaction, err)
 			}
 

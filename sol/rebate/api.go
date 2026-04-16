@@ -14,44 +14,41 @@ import (
 // ============== API 常量 ==============
 
 const (
-	SendBundleMethod       = "mev_sendBundle"
-	SimBundleMethod        = "mev_simBundle"
-	CancelBundleByHash     = "sol_cancelBundleByHash"
+	SendBundleMethod   = "mev_sendBundle"
+	SimBundleMethod    = "mev_simBundle"
+	CancelBundleMethod = "mev_cancelBundle"
 )
 
 // ============== API 错误 ==============
 
 var (
-	ErrInvalidParams   = errors.New("invalid params")
-	ErrBundleNotFound  = errors.New("bundle not found")
-	ErrRateLimited     = errors.New("rate limited")
+	ErrInvalidParams  = errors.New("invalid params")
+	ErrBundleNotFound = errors.New("bundle not found")
+	ErrRateLimited    = errors.New("rate limited")
 )
 
 // ============== API 实现 ==============
 
-// MevShareAPI MEV-Share API
+// MevShareAPI MEV-Share API (Solana 版本)
 type MevShareAPI struct {
-	signer       string
 	queue        *SimulationQueue
 	store        *BundleStore
 	simulator    SimulationBackend
-	knownBundles sync.Map  // Bundle 缓存, 防止重复处理
+	knownBundles sync.Map
 	rateLimiter  *RateLimiter
 }
 
 // NewMevShareAPI 创建 MEV-Share API
 func NewMevShareAPI(
-	signer string,
 	queue *SimulationQueue,
 	store *BundleStore,
 	simulator SimulationBackend,
 ) *MevShareAPI {
 	return &MevShareAPI{
-		signer:      signer,
 		queue:       queue,
 		store:       store,
 		simulator:   simulator,
-		rateLimiter: NewRateLimiter(10, time.Second), // 10 req/s
+		rateLimiter: NewRateLimiter(100, time.Second),
 	}
 }
 
@@ -70,7 +67,7 @@ func (api *MevShareAPI) SendBundle(ctx context.Context, args SendMevBundleArgs) 
 	currentSlot := api.getCurrentSlot()
 
 	// 2. 验证 Bundle
-	bundleHash, hasUnmatchedHash, err := ValidateBundle(&args, currentSlot, api.signer)
+	bundleHash, hasUnmatchedHash, err := ValidateBundle(&args, currentSlot)
 	if err != nil {
 		logger.Warn().Err(err).Msg("Bundle validation failed")
 		return nil, fmt.Errorf("validation failed: %w", err)
@@ -85,14 +82,16 @@ func (api *MevShareAPI) SendBundle(ctx context.Context, args SendMevBundleArgs) 
 	}
 
 	// 4. 设置元数据
+	if args.Metadata == nil {
+		args.Metadata = &MevBundleMetadata{}
+	}
 	args.Metadata.ReceivedAt = time.Now().UnixMicro()
-	args.Metadata.Signer = api.signer
+	args.Metadata.BundleHash = bundleHash
 
 	// 5. 处理 Backrun (如果有未匹配的 Hash 引用)
 	if hasUnmatchedHash {
 		if err := api.handleBackrun(ctx, &args); err != nil {
 			logger.Warn().Err(err).Msg("Failed to handle backrun")
-			// 不阻止提交, 可能稍后匹配
 		}
 	}
 
@@ -100,8 +99,7 @@ func (api *MevShareAPI) SendBundle(ctx context.Context, args SendMevBundleArgs) 
 	api.store.StoreBundle(&args)
 
 	// 7. 加入模拟队列
-	priority := false // 可以根据来源或其他条件设置优先级
-	api.queue.Push(&args, priority)
+	api.queue.Push(&args, false)
 
 	logger.Info().
 		Str("bundleHash", bundleHash).
@@ -113,11 +111,11 @@ func (api *MevShareAPI) SendBundle(ctx context.Context, args SendMevBundleArgs) 
 
 // handleBackrun 处理 Backrun (Bundle 引用)
 func (api *MevShareAPI) handleBackrun(ctx context.Context, bundle *SendMevBundleArgs) error {
-	if len(bundle.Body) == 0 || bundle.Body[0].Hash == nil {
+	if len(bundle.Body) == 0 || bundle.Body[0].Hash == "" {
 		return nil
 	}
 
-	matchingHash := *bundle.Body[0].Hash
+	matchingHash := bundle.Body[0].Hash
 
 	// 查找被引用的 Bundle
 	targetBundle, found := api.store.GetBundleByMatchingHash(matchingHash)
@@ -131,21 +129,21 @@ func (api *MevShareAPI) handleBackrun(ctx context.Context, bundle *SendMevBundle
 	}
 
 	// 替换 Hash 引用为实际 Bundle
-	bundle.Body[0].Hash = nil
+	bundle.Body[0].Hash = ""
 	bundle.Body[0].Bundle = targetBundle
 	bundle.Metadata.Prematched = true
 
 	// 合并 Inclusion 范围
-	minSlot := min(bundle.Inclusion.Slot, targetBundle.Inclusion.Slot)
-	maxSlot := min(bundle.Inclusion.MaxSlot, targetBundle.Inclusion.MaxSlot)
+	minSlot := bundle.Inclusion.Slot
+	if targetBundle.Inclusion.Slot < minSlot {
+		minSlot = targetBundle.Inclusion.Slot
+	}
+	maxSlot := bundle.Inclusion.MaxSlot
+	if targetBundle.Inclusion.MaxSlot < maxSlot {
+		maxSlot = targetBundle.Inclusion.MaxSlot
+	}
 	bundle.Inclusion.Slot = minSlot
 	bundle.Inclusion.MaxSlot = maxSlot
-
-	// 重新计算 Bundle Hash
-	bodyHashes := []string{targetBundle.Metadata.BundleHash}
-	bodyHashes = append(bodyHashes, bundle.Metadata.BodyHashes[1:]...)
-	bundle.Metadata.BundleHash = calculateBundleHash(bodyHashes)
-	bundle.Metadata.BodyHashes = bodyHashes
 
 	logger.Info().
 		Str("bundleHash", bundle.Metadata.BundleHash).
@@ -171,7 +169,7 @@ func (api *MevShareAPI) SimBundle(ctx context.Context, args SendMevBundleArgs) (
 
 	// 验证 Bundle
 	currentSlot := api.getCurrentSlot()
-	_, _, err := ValidateBundle(&args, currentSlot, api.signer)
+	_, _, err := ValidateBundle(&args, currentSlot)
 	if err != nil {
 		return nil, fmt.Errorf("validation failed: %w", err)
 	}
@@ -185,13 +183,13 @@ func (api *MevShareAPI) SimBundle(ctx context.Context, args SendMevBundleArgs) (
 	return result, nil
 }
 
-// ============== CancelBundleByHash ==============
+// ============== CancelBundle ==============
 
-// CancelBundleByHash 取消 Bundle
-func (api *MevShareAPI) CancelBundleByHash(ctx context.Context, hash string) (*CancelBundleResponse, error) {
+// CancelBundle 取消 Bundle
+func (api *MevShareAPI) CancelBundle(ctx context.Context, hash string) (*CancelBundleResponse, error) {
 	logger.Info().
 		Str("hash", hash).
-		Msg("Received CancelBundleByHash request")
+		Msg("Received CancelBundle request")
 
 	cancelled := api.store.Cancel(hash)
 	if !cancelled {
@@ -208,7 +206,7 @@ func (api *MevShareAPI) getCurrentSlot() uint64 {
 	if sim, ok := api.simulator.(*MockSimulator); ok {
 		return sim.GetSlot()
 	}
-	return 1000000 // 默认值
+	return 1000000
 }
 
 // ============== JSON-RPC 服务器 ==============
@@ -259,7 +257,7 @@ func NewJSONRPCHandler(api *MevShareAPI) http.Handler {
 			result, rpcErr = handleSendBundle(ctx, api, req.Params)
 		case SimBundleMethod:
 			result, rpcErr = handleSimBundle(ctx, api, req.Params)
-		case CancelBundleByHash:
+		case CancelBundleMethod:
 			result, rpcErr = handleCancelBundle(ctx, api, req.Params)
 		default:
 			rpcErr = &JSONRPCError{Code: -32601, Message: "Method not found"}
@@ -296,13 +294,12 @@ func handleSimBundle(ctx context.Context, api *MevShareAPI, params json.RawMessa
 }
 
 func handleCancelBundle(ctx context.Context, api *MevShareAPI, params json.RawMessage) (interface{}, *JSONRPCError) {
-	// 处理字符串参数
 	var args []string
 	if err := json.Unmarshal(params, &args); err != nil || len(args) == 0 {
 		return nil, &JSONRPCError{Code: -32602, Message: "Invalid params"}
 	}
 
-	result, err := api.CancelBundleByHash(ctx, args[0])
+	result, err := api.CancelBundle(ctx, args[0])
 	if err != nil {
 		return nil, &JSONRPCError{Code: -32000, Message: err.Error()}
 	}
@@ -368,39 +365,4 @@ func (r *RateLimiter) Allow() bool {
 		return true
 	}
 	return false
-}
-
-// ============== 工具函数 ==============
-
-// extractHashFromParams 从 JSON-RPC 参数中提取 hash
-func extractHashFromParams(params json.RawMessage) string {
-	var args []string
-	if err := json.Unmarshal(params, &args); err == nil && len(args) > 0 {
-		return args[0]
-	}
-
-	// 尝试解析为对象
-	var objArgs []map[string]interface{}
-	if err := json.Unmarshal(params, &objArgs); err == nil && len(objArgs) > 0 {
-		if hash, ok := objArgs[0]["hash"].(string); ok {
-			return hash
-		}
-	}
-
-	return ""
-}
-
-// isValidSolanaAddress 检查是否为有效的 Solana 地址 (简化版)
-func isValidSolanaAddress(addr string) bool {
-	// Solana 地址是 base58 编码，32字节，通常 43-44 个字符
-	if len(addr) < 32 || len(addr) > 44 {
-		return false
-	}
-	// 检查是否包含无效的 base58 字符
-	for _, c := range addr {
-		if !strings.ContainsRune("123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz", c) {
-			return false
-		}
-	}
-	return true
 }
