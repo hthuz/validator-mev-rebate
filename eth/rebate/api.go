@@ -18,17 +18,17 @@ import (
 // ============== API 常量 ==============
 
 const (
-	SendBundleMethod       = "mev_sendBundle"
-	SimBundleMethod        = "mev_simBundle"
-	CancelBundleByHash     = "eth_cancelBundleByHash"
+	SendBundleMethod   = "mev_sendBundle"
+	SimBundleMethod    = "mev_simBundle"
+	CancelBundleByHash = "eth_cancelBundleByHash"
 )
 
 // ============== API 错误 ==============
 
 var (
-	ErrInvalidParams   = errors.New("invalid params")
-	ErrBundleNotFound  = errors.New("bundle not found")
-	ErrRateLimited     = errors.New("rate limited")
+	ErrInvalidParams  = errors.New("invalid params")
+	ErrBundleNotFound = errors.New("bundle not found")
+	ErrRateLimited    = errors.New("rate limited")
 )
 
 // ============== API 实现 ==============
@@ -39,7 +39,7 @@ type MevShareAPI struct {
 	queue        *SimulationQueue
 	store        *BundleStore
 	simulator    SimulationBackend
-	knownBundles sync.Map  // Bundle 缓存, 防止重复处理
+	knownBundles sync.Map // Bundle 缓存, 防止重复处理
 	rateLimiter  *RateLimiter
 }
 
@@ -229,10 +229,10 @@ type JSONRPCRequest struct {
 
 // JSONRPCResponse JSON-RPC 响应
 type JSONRPCResponse struct {
-	JSONRPC string          `json:"jsonrpc"`
-	Result  interface{}     `json:"result,omitempty"`
-	Error   *JSONRPCError   `json:"error,omitempty"`
-	ID      interface{}     `json:"id"`
+	JSONRPC string        `json:"jsonrpc"`
+	Result  interface{}   `json:"result,omitempty"`
+	Error   *JSONRPCError `json:"error,omitempty"`
+	ID      interface{}   `json:"id"`
 }
 
 // JSONRPCError JSON-RPC 错误

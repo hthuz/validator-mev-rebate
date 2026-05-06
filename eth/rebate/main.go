@@ -51,7 +51,7 @@ func main() {
 
 	// 5. 创建 HTTP 服务器
 	mux := http.NewServeMux()
-	mux.Handle("/", NewJSONRPCHandler(api))
+	mux.Handle("/", NewRootHandler(api))
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
@@ -159,6 +159,8 @@ func printUsage(port string) {
 	logger.Info().Msg("Validator MEV Rebate Node is running!")
 	logger.Info().Msg("=================================================")
 	logger.Info().Msg("")
+	logger.Info().Msgf("Web Interface: http://localhost:%s/", port)
+	logger.Info().Msg("")
 	logger.Info().Msg("Supported JSON-RPC methods:")
 	logger.Info().Msg("  - mev_sendBundle    : Submit a bundle")
 	logger.Info().Msg("  - mev_simBundle     : Simulate a bundle")
@@ -190,3 +192,4 @@ func printUsage(port string) {
 	logger.Info().Msg("Press Ctrl+C to stop")
 	logger.Info().Msg("=================================================")
 }
+

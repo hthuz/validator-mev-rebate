@@ -81,12 +81,12 @@ func (h *MetricsHandler) GetAllValidators(w http.ResponseWriter, r *http.Request
 
 	// 转换为列表格式
 	type ValidatorSummary struct {
-		Address        string   `json:"address"`
-		TotalBlocks    uint64   `json:"totalBlocks"`
-		MevBlocks      uint64   `json:"mevBlocks"`
-		TotalRevenue   string   `json:"totalRevenue"`
-		Participation  float64  `json:"participationRate"`
-		SuccessRate    float64  `json:"successRate"`
+		Address       string  `json:"address"`
+		TotalBlocks   uint64  `json:"totalBlocks"`
+		MevBlocks     uint64  `json:"mevBlocks"`
+		TotalRevenue  string  `json:"totalRevenue"`
+		Participation float64 `json:"participationRate"`
+		SuccessRate   float64 `json:"successRate"`
 	}
 
 	summaries := make([]ValidatorSummary, 0, len(validators))
@@ -141,11 +141,11 @@ func (h *MetricsHandler) GetAllSearchers(w http.ResponseWriter, r *http.Request)
 
 	// 转换为列表格式
 	type SearcherSummary struct {
-		Address       string  `json:"address"`
-		TotalBundles  uint64  `json:"totalBundles"`
-		SuccessRate   float64 `json:"successRate"`
-		TotalProfit   string  `json:"totalProfit"`
-		BackrunCount  uint64  `json:"backrunCount"`
+		Address      string  `json:"address"`
+		TotalBundles uint64  `json:"totalBundles"`
+		SuccessRate  float64 `json:"successRate"`
+		TotalProfit  string  `json:"totalProfit"`
+		BackrunCount uint64  `json:"backrunCount"`
 	}
 
 	summaries := make([]SearcherSummary, 0, len(searchers))

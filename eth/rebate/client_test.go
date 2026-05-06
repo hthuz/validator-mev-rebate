@@ -296,7 +296,7 @@ func createTestTx(t *testing.T) hexutil.Bytes {
 		Gas:      21000,
 		To:       ptrAddress(common.HexToAddress("0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D")),
 		Value:    big.NewInt(1000000000000000000), // 1 ETH
-		Data:     []byte{0xa9, 0x05, 0x9c, 0xbb}, // transfer 函数选择器
+		Data:     []byte{0xa9, 0x05, 0x9c, 0xbb},  // transfer 函数选择器
 	})
 
 	// 签名
