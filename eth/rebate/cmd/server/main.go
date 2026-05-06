@@ -26,14 +26,14 @@ func main() {
 	port := flag.String("port", "8080", "HTTP server port")
 	flag.Parse()
 
-	log.Logger.Info().Msg("Starting Validator MEV Rebate Node...")
+	logger.Info().Msg("Starting Validator MEV Rebate Node...")
 
 	// 1. 生成签名密钥 (用于 MatchingHash)
 	signer, err := utils.GenerateSigner()
 	if err != nil {
 		log.Logger.Fatal().Err(err).Msg("Failed to generate signer")
 	}
-	log.Logger.Info().Msg("Signer key generated")
+	logger.Info().Msg("Signer key generated")
 
 	// 2. 创建组件
 	store := sim.NewBundleStore()

@@ -3,19 +3,13 @@ package main
 import (
 	"context"
 	"fmt"
-	"math/big"
 	"rebate/api"
 	"rebate/internal/queue"
 	"rebate/internal/sim"
 	"rebate/pkg/types"
 	"rebate/pkg/utils"
-	"testing"
 
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
-	etypes "github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/ethereum/go-ethereum/rlp"
 )
 
 // // TestClient 测试 MEV-Share Demo
@@ -228,97 +222,6 @@ import (
 
 // 	t.Logf("Hint extracted: hash=%s, txs=%d, logs=%d", hint.Hash.Hex(), len(hint.Txs), len(hint.Logs))
 // }
-
-// // TestJSONRPCEndpoint 测试 JSON-RPC 端点
-// func TestJSONRPCEndpoint(t *testing.T) {
-// 	// 创建服务器
-// 	signer, _ := GenerateSigner()
-// 	store := NewBundleStore()
-// 	queue := NewSimulationQueue()
-// 	simulator := NewMockSimulator()
-// 	api := NewMevShareAPI(signer, queue, store, simulator)
-// 	handler := NewJSONRPCHandler(api)
-
-// 	// 创建测试服务器
-// 	server := &http.Server{Addr: ":18080", Handler: handler}
-// 	go server.ListenAndServe()
-// 	defer server.Close()
-// 	time.Sleep(100 * time.Millisecond)
-
-// 	// 构造请求
-// 	tx := createTestTx(t)
-// 	reqBody := map[string]interface{}{
-// 		"jsonrpc": "2.0",
-// 		"method":  "mev_sendBundle",
-// 		"params": []map[string]interface{}{
-// 			{
-// 				"version": "v0.1",
-// 				"inclusion": map[string]string{
-// 					"block":    "0xF4240",
-// 					"maxBlock": "0xF424A",
-// 				},
-// 				"body": []map[string]interface{}{
-// 					{"tx": hexutil.Encode(tx)},
-// 				},
-// 			},
-// 		},
-// 		"id": 1,
-// 	}
-
-// 	body, _ := json.Marshal(reqBody)
-// 	resp, err := http.Post("http://localhost:18080", "application/json", bytes.NewReader(body))
-// 	if err != nil {
-// 		t.Fatalf("HTTP request failed: %v", err)
-// 	}
-// 	defer resp.Body.Close()
-
-// 	var result api.JSONRPCResponse
-// 	json.NewDecoder(resp.Body).Decode(&result)
-
-// 	if result.Error != nil {
-// 		t.Errorf("RPC error: %s", result.Error.Message)
-// 	}
-
-// 	t.Logf("RPC response: %+v", result.Result)
-// }
-
-// createTestTx 创建测试交易
-func createTestTx(t *testing.T) hexutil.Bytes {
-	// 生成测试私钥
-	privateKey, err := crypto.GenerateKey()
-	if err != nil {
-		t.Fatalf("Failed to generate key: %v", err)
-	}
-
-	// 创建交易
-	tx := etypes.NewTx(&etypes.LegacyTx{
-		Nonce:    0,
-		GasPrice: big.NewInt(1000000000), // 1 Gwei
-		Gas:      21000,
-		To:       ptrAddress(common.HexToAddress("0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D")),
-		Value:    big.NewInt(1000000000000000000), // 1 ETH
-		Data:     []byte{0xa9, 0x05, 0x9c, 0xbb},  // transfer 函数选择器
-	})
-
-	// 签名
-	signer := etypes.NewEIP155Signer(big.NewInt(1))
-	signedTx, err := etypes.SignTx(tx, signer, privateKey)
-	if err != nil {
-		t.Fatalf("Failed to sign tx: %v", err)
-	}
-
-	// RLP 编码
-	data, err := rlp.EncodeToBytes(signedTx)
-	if err != nil {
-		t.Fatalf("Failed to encode tx: %v", err)
-	}
-
-	return data
-}
-
-func ptrAddress(addr common.Address) *common.Address {
-	return &addr
-}
 
 // ExampleUsage 示例用法
 func ExampleUsage() {
