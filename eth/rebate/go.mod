@@ -1,4 +1,4 @@
-module validator-mev-rebate
+module rebate
 
 go 1.21
 

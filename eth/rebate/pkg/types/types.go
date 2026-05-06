@@ -1,4 +1,4 @@
-package main
+package types
 
 import (
 	"github.com/ethereum/go-ethereum/common"
@@ -9,13 +9,13 @@ import (
 
 // SendMevBundleArgs MEV-Share Bundle 的核心结构
 type SendMevBundleArgs struct {
-	Version         string              `json:"version"`
-	ReplacementUUID string              `json:"replacementUuid,omitempty"`
-	Inclusion       MevBundleInclusion  `json:"inclusion"`
-	Body            []MevBundleBody     `json:"body"`
-	Validity        MevBundleValidity   `json:"validity,omitempty"`
-	Privacy         *MevBundlePrivacy   `json:"privacy,omitempty"`
-	Metadata        *MevBundleMetadata  `json:"metadata,omitempty"`
+	Version         string             `json:"version"`
+	ReplacementUUID string             `json:"replacementUuid,omitempty"`
+	Inclusion       MevBundleInclusion `json:"inclusion"`
+	Body            []MevBundleBody    `json:"body"`
+	Validity        MevBundleValidity  `json:"validity,omitempty"`
+	Privacy         *MevBundlePrivacy  `json:"privacy,omitempty"`
+	Metadata        *MevBundleMetadata `json:"metadata,omitempty"`
 }
 
 // MevBundleInclusion 定义 Bundle 目标区块范围
@@ -93,11 +93,11 @@ func (h HintIntent) Has(flag HintIntent) bool {
 
 // Hint 提取的 Hint 信息
 type Hint struct {
-	Hash        common.Hash       `json:"hash"`                  // 匹配哈希
-	Logs        []CleanLog        `json:"logs,omitempty"`        // 日志
-	Txs         []TxHint          `json:"txs,omitempty"`         // 交易提示
-	MevGasPrice *hexutil.Big      `json:"mevGasPrice,omitempty"` // MEV Gas Price
-	GasUsed     *hexutil.Uint64   `json:"gasUsed,omitempty"`     // Gas 使用量
+	Hash        common.Hash     `json:"hash"`                  // 匹配哈希
+	Logs        []CleanLog      `json:"logs,omitempty"`        // 日志
+	Txs         []TxHint        `json:"txs,omitempty"`         // 交易提示
+	MevGasPrice *hexutil.Big    `json:"mevGasPrice,omitempty"` // MEV Gas Price
+	GasUsed     *hexutil.Uint64 `json:"gasUsed,omitempty"`     // Gas 使用量
 }
 
 // TxHint 交易的 Hint 信息
@@ -119,21 +119,21 @@ type CleanLog struct {
 
 // SimMevBundleResponse 模拟结果
 type SimMevBundleResponse struct {
-	Success         bool              `json:"success"`
-	Error           string            `json:"error,omitempty"`
-	StateBlock      hexutil.Uint64    `json:"stateBlock"`
-	MevGasPrice     hexutil.Big       `json:"mevGasPrice"`
-	Profit          hexutil.Big       `json:"profit"`
-	RefundableValue hexutil.Big       `json:"refundableValue"`
-	GasUsed         hexutil.Uint64    `json:"gasUsed"`
-	BodyLogs        []SimMevBodyLogs  `json:"logs,omitempty"`
-	ExecError       string            `json:"execError,omitempty"`
-	Revert          hexutil.Bytes     `json:"revert,omitempty"`
+	Success         bool             `json:"success"`
+	Error           string           `json:"error,omitempty"`
+	StateBlock      hexutil.Uint64   `json:"stateBlock"`
+	MevGasPrice     hexutil.Big      `json:"mevGasPrice"`
+	Profit          hexutil.Big      `json:"profit"`
+	RefundableValue hexutil.Big      `json:"refundableValue"`
+	GasUsed         hexutil.Uint64   `json:"gasUsed"`
+	BodyLogs        []SimMevBodyLogs `json:"logs,omitempty"`
+	ExecError       string           `json:"execError,omitempty"`
+	Revert          hexutil.Bytes    `json:"revert,omitempty"`
 }
 
 // SimMevBodyLogs 模拟执行的日志
 type SimMevBodyLogs struct {
-	TxLogs  []SimLog `json:"txLogs,omitempty"`
+	TxLogs     []SimLog         `json:"txLogs,omitempty"`
 	BundleLogs []SimMevBodyLogs `json:"bundleLogs,omitempty"`
 }
 

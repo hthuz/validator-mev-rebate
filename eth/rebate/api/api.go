@@ -1,4 +1,4 @@
-package main
+package api
 
 import (
 	"context"
@@ -7,6 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"rebate/internal"
+	"rebate/internal/queue"
+	"rebate/internal/sim"
+	"rebate/log"
+	"rebate/pkg/types"
 	"sync"
 	"time"
 
@@ -14,6 +19,8 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
 )
+
+var logger = log.Logger
 
 // ============== API 常量 ==============
 
@@ -36,9 +43,9 @@ var (
 // MevShareAPI MEV-Share API
 type MevShareAPI struct {
 	signer       *ecdsa.PrivateKey
-	queue        *SimulationQueue
-	store        *BundleStore
-	simulator    SimulationBackend
+	queue        *queue.SimulationQueue
+	store        *sim.BundleStore
+	simulator    sim.SimulationBackend
 	knownBundles sync.Map // Bundle 缓存, 防止重复处理
 	rateLimiter  *RateLimiter
 }
@@ -46,9 +53,9 @@ type MevShareAPI struct {
 // NewMevShareAPI 创建 MEV-Share API
 func NewMevShareAPI(
 	signer *ecdsa.PrivateKey,
-	queue *SimulationQueue,
-	store *BundleStore,
-	simulator SimulationBackend,
+	queue *queue.SimulationQueue,
+	store *sim.BundleStore,
+	simulator sim.SimulationBackend,
 ) *MevShareAPI {
 	return &MevShareAPI{
 		signer:      signer,
@@ -62,8 +69,8 @@ func NewMevShareAPI(
 // ============== SendBundle ==============
 
 // SendBundle 提交 MEV Bundle
-func (api *MevShareAPI) SendBundle(ctx context.Context, args SendMevBundleArgs) (*SendMevBundleResponse, error) {
-	logger.Info().
+func (api *MevShareAPI) SendBundle(ctx context.Context, args types.SendMevBundleArgs) (*types.SendMevBundleResponse, error) {
+	log.Logger.Info().
 		Str("version", args.Version).
 		Uint64("block", uint64(args.Inclusion.BlockNumber)).
 		Uint64("maxBlock", uint64(args.Inclusion.MaxBlock)).
@@ -74,18 +81,18 @@ func (api *MevShareAPI) SendBundle(ctx context.Context, args SendMevBundleArgs) 
 	currentBlock := api.getCurrentBlock()
 
 	// 2. 验证 Bundle
-	bundleHash, hasUnmatchedHash, err := ValidateBundle(&args, currentBlock, api.signer)
+	bundleHash, hasUnmatchedHash, err := internal.ValidateBundle(&args, currentBlock, api.signer)
 	if err != nil {
-		logger.Warn().Err(err).Msg("Bundle validation failed")
+		log.Logger.Warn().Err(err).Msg("Bundle validation failed")
 		return nil, fmt.Errorf("validation failed: %w", err)
 	}
 
 	// 3. 检查是否已处理过
 	if _, exists := api.knownBundles.LoadOrStore(bundleHash, time.Now()); exists {
-		logger.Debug().
+		log.Logger.Debug().
 			Str("bundleHash", bundleHash.Hex()).
 			Msg("Bundle already known, skipping")
-		return &SendMevBundleResponse{BundleHash: bundleHash}, nil
+		return &types.SendMevBundleResponse{BundleHash: bundleHash}, nil
 	}
 
 	// 4. 设置元数据
@@ -97,7 +104,7 @@ func (api *MevShareAPI) SendBundle(ctx context.Context, args SendMevBundleArgs) 
 	// 5. 处理 Backrun (如果有未匹配的 Hash 引用)
 	if hasUnmatchedHash {
 		if err := api.handleBackrun(ctx, &args); err != nil {
-			logger.Warn().Err(err).Msg("Failed to handle backrun")
+			log.Logger.Warn().Err(err).Msg("Failed to handle backrun")
 			// 不阻止提交, 可能稍后匹配
 		}
 	}
@@ -109,16 +116,16 @@ func (api *MevShareAPI) SendBundle(ctx context.Context, args SendMevBundleArgs) 
 	priority := false // 可以根据来源或其他条件设置优先级
 	api.queue.Push(&args, priority)
 
-	logger.Info().
+	log.Logger.Info().
 		Str("bundleHash", bundleHash.Hex()).
 		Bool("hasBackrun", hasUnmatchedHash).
 		Msg("Bundle accepted")
 
-	return &SendMevBundleResponse{BundleHash: bundleHash}, nil
+	return &types.SendMevBundleResponse{BundleHash: bundleHash}, nil
 }
 
 // handleBackrun 处理 Backrun (Bundle 引用)
-func (api *MevShareAPI) handleBackrun(ctx context.Context, bundle *SendMevBundleArgs) error {
+func (api *MevShareAPI) handleBackrun(ctx context.Context, bundle *types.SendMevBundleArgs) error {
 	if len(bundle.Body) == 0 || bundle.Body[0].Hash == nil {
 		return nil
 	}
@@ -132,7 +139,7 @@ func (api *MevShareAPI) handleBackrun(ctx context.Context, bundle *SendMevBundle
 	}
 
 	// 检查被引用的 Bundle 是否允许 Hash Hint
-	if targetBundle.Privacy == nil || !targetBundle.Privacy.Hints.Has(HintHash) {
+	if targetBundle.Privacy == nil || !targetBundle.Privacy.Hints.Has(types.HintHash) {
 		return errors.New("referenced bundle does not allow hash hint")
 	}
 
@@ -150,10 +157,10 @@ func (api *MevShareAPI) handleBackrun(ctx context.Context, bundle *SendMevBundle
 	// 重新计算 Bundle Hash
 	bodyHashes := []common.Hash{targetBundle.Metadata.BundleHash}
 	bodyHashes = append(bodyHashes, bundle.Metadata.BodyHashes[1:]...)
-	bundle.Metadata.BundleHash = calculateBundleHash(bodyHashes)
+	bundle.Metadata.BundleHash = internal.CalculateBundleHash(bodyHashes)
 	bundle.Metadata.BodyHashes = bodyHashes
 
-	logger.Info().
+	log.Logger.Info().
 		Str("bundleHash", bundle.Metadata.BundleHash.Hex()).
 		Str("matchingHash", matchingHash.Hex()).
 		Msg("Backrun matched")
@@ -164,20 +171,20 @@ func (api *MevShareAPI) handleBackrun(ctx context.Context, bundle *SendMevBundle
 // ============== SimBundle ==============
 
 // SimBundle 模拟 Bundle 执行
-func (api *MevShareAPI) SimBundle(ctx context.Context, args SendMevBundleArgs) (*SimMevBundleResponse, error) {
+func (api *MevShareAPI) SimBundle(ctx context.Context, args types.SendMevBundleArgs) (*types.SimMevBundleResponse, error) {
 	// 速率限制
 	if !api.rateLimiter.Allow() {
 		return nil, ErrRateLimited
 	}
 
-	logger.Info().
+	log.Logger.Info().
 		Str("version", args.Version).
 		Int("bodyLen", len(args.Body)).
 		Msg("Received SimBundle request")
 
 	// 验证 Bundle
 	currentBlock := api.getCurrentBlock()
-	_, _, err := ValidateBundle(&args, currentBlock, api.signer)
+	_, _, err := internal.ValidateBundle(&args, currentBlock, api.signer)
 	if err != nil {
 		return nil, fmt.Errorf("validation failed: %w", err)
 	}
@@ -194,7 +201,7 @@ func (api *MevShareAPI) SimBundle(ctx context.Context, args SendMevBundleArgs) (
 // ============== CancelBundleByHash ==============
 
 // CancelBundleByHash 取消 Bundle
-func (api *MevShareAPI) CancelBundleByHash(ctx context.Context, hash common.Hash) (*CancelBundleResponse, error) {
+func (api *MevShareAPI) CancelBundleByHash(ctx context.Context, hash common.Hash) (*types.CancelBundleResponse, error) {
 	logger.Info().
 		Str("hash", hash.Hex()).
 		Msg("Received CancelBundleByHash request")
@@ -204,14 +211,14 @@ func (api *MevShareAPI) CancelBundleByHash(ctx context.Context, hash common.Hash
 		return nil, ErrBundleNotFound
 	}
 
-	return &CancelBundleResponse{
+	return &types.CancelBundleResponse{
 		Cancelled: []common.Hash{hash},
 	}, nil
 }
 
 // getCurrentBlock 获取当前块号
 func (api *MevShareAPI) getCurrentBlock() uint64 {
-	if sim, ok := api.simulator.(*MockSimulator); ok {
+	if sim, ok := api.simulator.(*sim.MockSimulator); ok {
 		return sim.GetBlock()
 	}
 	return 1000000 // 默认值
@@ -276,7 +283,7 @@ func NewJSONRPCHandler(api *MevShareAPI) http.Handler {
 }
 
 func handleSendBundle(ctx context.Context, api *MevShareAPI, params json.RawMessage) (interface{}, *JSONRPCError) {
-	var args []SendMevBundleArgs
+	var args []types.SendMevBundleArgs
 	if err := json.Unmarshal(params, &args); err != nil || len(args) == 0 {
 		return nil, &JSONRPCError{Code: -32602, Message: "Invalid params"}
 	}
@@ -289,7 +296,7 @@ func handleSendBundle(ctx context.Context, api *MevShareAPI, params json.RawMess
 }
 
 func handleSimBundle(ctx context.Context, api *MevShareAPI, params json.RawMessage) (interface{}, *JSONRPCError) {
-	var args []SendMevBundleArgs
+	var args []types.SendMevBundleArgs
 	if err := json.Unmarshal(params, &args); err != nil || len(args) == 0 {
 		return nil, &JSONRPCError{Code: -32602, Message: "Invalid params"}
 	}

@@ -1,4 +1,4 @@
-package main
+package sim
 
 import (
 	"context"
@@ -7,9 +7,15 @@ import (
 	"sync"
 	"time"
 
+	"rebate/internal"
+	"rebate/internal/metrics"
+	"rebate/internal/queue"
+	"rebate/log"
+	"rebate/pkg/types"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
-	"github.com/ethereum/go-ethereum/core/types"
+	etypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/rlp"
 )
@@ -18,7 +24,7 @@ import (
 
 // SimulationBackend 模拟后端接口
 type SimulationBackend interface {
-	SimulateBundle(ctx context.Context, bundle *SendMevBundleArgs, overrides map[string]interface{}) (*SimMevBundleResponse, error)
+	SimulateBundle(ctx context.Context, bundle *types.SendMevBundleArgs, overrides map[string]interface{}) (*types.SimMevBundleResponse, error)
 }
 
 // ============== Mock 模拟器 (用于 demo) ==============
@@ -37,7 +43,7 @@ func NewMockSimulator() *MockSimulator {
 }
 
 // SimulateBundle 模拟 Bundle 执行
-func (m *MockSimulator) SimulateBundle(ctx context.Context, bundle *SendMevBundleArgs, overrides map[string]interface{}) (*SimMevBundleResponse, error) {
+func (m *MockSimulator) SimulateBundle(ctx context.Context, bundle *types.SendMevBundleArgs, overrides map[string]interface{}) (*types.SimMevBundleResponse, error) {
 	m.mu.RLock()
 	currentBlock := m.currentBlock
 	m.mu.RUnlock()
@@ -53,7 +59,7 @@ func (m *MockSimulator) SimulateBundle(ctx context.Context, bundle *SendMevBundl
 	// 生成模拟日志
 	bodyLogs := m.generateMockLogs(bundle.Body)
 
-	response := &SimMevBundleResponse{
+	response := &types.SimMevBundleResponse{
 		Success:         true,
 		StateBlock:      hexutil.Uint64(currentBlock),
 		MevGasPrice:     hexutil.Big(*mevGasPrice),
@@ -63,7 +69,7 @@ func (m *MockSimulator) SimulateBundle(ctx context.Context, bundle *SendMevBundl
 		BodyLogs:        bodyLogs,
 	}
 
-	logger.Debug().
+	log.Logger.Debug().
 		Str("bundleHash", bundle.Metadata.BundleHash.Hex()).
 		Uint64("stateBlock", currentBlock).
 		Uint64("gasUsed", gasUsed).
@@ -73,18 +79,18 @@ func (m *MockSimulator) SimulateBundle(ctx context.Context, bundle *SendMevBundl
 }
 
 // generateMockLogs 生成模拟日志
-func (m *MockSimulator) generateMockLogs(body []MevBundleBody) []SimMevBodyLogs {
-	var bodyLogs []SimMevBodyLogs
+func (m *MockSimulator) generateMockLogs(body []types.MevBundleBody) []types.SimMevBodyLogs {
+	var bodyLogs []types.SimMevBodyLogs
 
 	for _, elem := range body {
-		logs := SimMevBodyLogs{}
+		logs := types.SimMevBodyLogs{}
 
 		if elem.Tx != nil {
 			// 解析交易获取目标地址
-			var tx types.Transaction
+			var tx etypes.Transaction
 			if err := rlp.DecodeBytes(*elem.Tx, &tx); err == nil && tx.To() != nil {
 				// 模拟一个 Uniswap V2 Swap 日志
-				logs.TxLogs = []SimLog{
+				logs.TxLogs = []types.SimLog{
 					{
 						Address: *tx.To(),
 						Topics: []common.Hash{
@@ -124,11 +130,11 @@ func (m *MockSimulator) GetBlock() uint64 {
 // SimulationWorker 模拟工作器
 type SimulationWorker struct {
 	simulator     SimulationBackend
-	queue         *SimulationQueue
+	queue         *queue.SimulationQueue
 	store         *BundleStore
-	hintBroadcast HintBroadcaster
+	hintBroadcast internal.HintBroadcaster
 	signer        *ecdsa.PrivateKey
-	metrics       *MetricsStore
+	metrics       *metrics.MetricsStore
 	wg            sync.WaitGroup
 	stopCh        chan struct{}
 }
@@ -136,11 +142,11 @@ type SimulationWorker struct {
 // NewSimulationWorker 创建模拟工作器
 func NewSimulationWorker(
 	simulator SimulationBackend,
-	queue *SimulationQueue,
+	queue *queue.SimulationQueue,
 	store *BundleStore,
-	hintBroadcast HintBroadcaster,
+	hintBroadcast internal.HintBroadcaster,
 	signer *ecdsa.PrivateKey,
-	metrics *MetricsStore,
+	metrics *metrics.MetricsStore,
 ) *SimulationWorker {
 	return &SimulationWorker{
 		simulator:     simulator,
@@ -157,14 +163,14 @@ func NewSimulationWorker(
 func (w *SimulationWorker) Start(ctx context.Context) {
 	w.wg.Add(1)
 	go w.run(ctx)
-	logger.Info().Msg("Simulation worker started")
+	log.Logger.Info().Msg("Simulation worker started")
 }
 
 // Stop 停止工作器
 func (w *SimulationWorker) Stop() {
 	close(w.stopCh)
 	w.wg.Wait()
-	logger.Info().Msg("Simulation worker stopped")
+	log.Logger.Info().Msg("Simulation worker stopped")
 }
 
 // run 工作器主循环
@@ -186,7 +192,7 @@ func (w *SimulationWorker) run(ctx context.Context) {
 
 			// 处理 Bundle
 			if err := w.process(ctx, item); err != nil {
-				logger.Error().
+				log.Logger.Error().
 					Err(err).
 					Str("bundleHash", item.Bundle.Metadata.BundleHash.Hex()).
 					Msg("Failed to process bundle")
@@ -199,10 +205,10 @@ func (w *SimulationWorker) run(ctx context.Context) {
 }
 
 // process 处理单个 Bundle
-func (w *SimulationWorker) process(ctx context.Context, item *BundleQueueItem) error {
+func (w *SimulationWorker) process(ctx context.Context, item *queue.BundleQueueItem) error {
 	bundle := item.Bundle
 
-	logger.Info().
+	log.Logger.Info().
 		Str("bundleHash", bundle.Metadata.BundleHash.Hex()).
 		Uint64("targetBlock", item.TargetBlock).
 		Int("retry", item.Retries).
@@ -210,7 +216,7 @@ func (w *SimulationWorker) process(ctx context.Context, item *BundleQueueItem) e
 
 	// 1. 检查是否已取消
 	if w.store.IsCancelled(bundle.Metadata.BundleHash) {
-		logger.Info().
+		log.Logger.Info().
 			Str("bundleHash", bundle.Metadata.BundleHash.Hex()).
 			Msg("Bundle was cancelled, skipping")
 		return nil
@@ -230,7 +236,7 @@ func (w *SimulationWorker) process(ctx context.Context, item *BundleQueueItem) e
 
 	var searcher common.Address
 	if len(bundle.Body) > 0 && bundle.Body[0].Tx != nil {
-		if sender, err := GetTransactionSender(*bundle.Body[0].Tx); err == nil {
+		if sender, err := internal.GetTransactionSender(*bundle.Body[0].Tx); err == nil {
 			searcher = sender
 		}
 	}
@@ -242,7 +248,7 @@ func (w *SimulationWorker) process(ctx context.Context, item *BundleQueueItem) e
 
 	// 5. 检查模拟结果
 	if !result.Success {
-		logger.Warn().
+		log.Logger.Warn().
 			Str("bundleHash", bundle.Metadata.BundleHash.Hex()).
 			Str("error", result.Error).
 			Str("execError", result.ExecError).
@@ -254,14 +260,14 @@ func (w *SimulationWorker) process(ctx context.Context, item *BundleQueueItem) e
 	}
 
 	// 6. 计算并设置 MatchingHash (用于 Hint)
-	bundle.Metadata.MatchingHash = calculateMatchingHash(bundle.Metadata.BundleHash, w.signer)
+	bundle.Metadata.MatchingHash = internal.CalculateMatchingHash(bundle.Metadata.BundleHash, w.signer)
 
 	// 7. 提取并广播 Hints
-	if bundle.Privacy != nil && bundle.Privacy.Hints != HintNone {
-		hint := ExtractHints(bundle, result)
+	if bundle.Privacy != nil && bundle.Privacy.Hints != types.HintNone {
+		hint := internal.ExtractHints(bundle, result)
 		if hint != nil {
 			if err := w.hintBroadcast.Broadcast(hint); err != nil {
-				logger.Error().Err(err).Msg("Failed to broadcast hint")
+				log.Logger.Error().Err(err).Msg("Failed to broadcast hint")
 			}
 		}
 	}
@@ -272,7 +278,7 @@ func (w *SimulationWorker) process(ctx context.Context, item *BundleQueueItem) e
 	// 9. 发送给 Builder (简化版: 只记录日志)
 	w.sendToBuilders(bundle, result)
 
-	logger.Info().
+	log.Logger.Info().
 		Str("bundleHash", bundle.Metadata.BundleHash.Hex()).
 		Uint64("gasUsed", uint64(result.GasUsed)).
 		Str("profit", result.Profit.ToInt().String()).
@@ -281,15 +287,15 @@ func (w *SimulationWorker) process(ctx context.Context, item *BundleQueueItem) e
 	return nil
 }
 
-// sendToBuilders 发送给 Builders (简化版)
-func (w *SimulationWorker) sendToBuilders(bundle *SendMevBundleArgs, result *SimMevBundleResponse) {
+// sendToBuilders 发送给 Builders (简化版
+func (w *SimulationWorker) sendToBuilders(bundle *types.SendMevBundleArgs, result *types.SimMevBundleResponse) {
 	builders := []string{"flashbots"} // 默认 Builder
 	if bundle.Privacy != nil && len(bundle.Privacy.Builders) > 0 {
 		builders = bundle.Privacy.Builders
 	}
 
 	for _, builder := range builders {
-		logger.Info().
+		log.Logger.Info().
 			Str("bundleHash", bundle.Metadata.BundleHash.Hex()).
 			Str("builder", builder).
 			Msg("Sending bundle to builder (simulated)")
@@ -301,8 +307,8 @@ func (w *SimulationWorker) sendToBuilders(bundle *SendMevBundleArgs, result *Sim
 // BundleStore Bundle 存储
 type BundleStore struct {
 	mu         sync.RWMutex
-	bundles    map[common.Hash]*SendMevBundleArgs
-	simResults map[common.Hash]*SimMevBundleResponse
+	bundles    map[common.Hash]*types.SendMevBundleArgs
+	simResults map[common.Hash]*types.SimMevBundleResponse
 	cancelled  map[common.Hash]bool
 	matchIndex map[common.Hash]common.Hash // matchingHash -> bundleHash
 }
@@ -310,22 +316,22 @@ type BundleStore struct {
 // NewBundleStore 创建 Bundle 存储
 func NewBundleStore() *BundleStore {
 	return &BundleStore{
-		bundles:    make(map[common.Hash]*SendMevBundleArgs),
-		simResults: make(map[common.Hash]*SimMevBundleResponse),
+		bundles:    make(map[common.Hash]*types.SendMevBundleArgs),
+		simResults: make(map[common.Hash]*types.SimMevBundleResponse),
 		cancelled:  make(map[common.Hash]bool),
 		matchIndex: make(map[common.Hash]common.Hash),
 	}
 }
 
 // StoreBundle 存储 Bundle
-func (s *BundleStore) StoreBundle(bundle *SendMevBundleArgs) {
+func (s *BundleStore) StoreBundle(bundle *types.SendMevBundleArgs) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.bundles[bundle.Metadata.BundleHash] = bundle
 }
 
 // GetBundle 获取 Bundle
-func (s *BundleStore) GetBundle(hash common.Hash) (*SendMevBundleArgs, bool) {
+func (s *BundleStore) GetBundle(hash common.Hash) (*types.SendMevBundleArgs, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	b, ok := s.bundles[hash]
@@ -333,7 +339,7 @@ func (s *BundleStore) GetBundle(hash common.Hash) (*SendMevBundleArgs, bool) {
 }
 
 // GetBundleByMatchingHash 通过 MatchingHash 获取 Bundle (用于 backrunning)
-func (s *BundleStore) GetBundleByMatchingHash(matchingHash common.Hash) (*SendMevBundleArgs, bool) {
+func (s *BundleStore) GetBundleByMatchingHash(matchingHash common.Hash) (*types.SendMevBundleArgs, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -352,14 +358,14 @@ func (s *BundleStore) IndexMatchingHash(matchingHash, bundleHash common.Hash) {
 }
 
 // StoreSimResult 存储模拟结果
-func (s *BundleStore) StoreSimResult(hash common.Hash, result *SimMevBundleResponse) {
+func (s *BundleStore) StoreSimResult(hash common.Hash, result *types.SimMevBundleResponse) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.simResults[hash] = result
 }
 
 // GetSimResult 获取模拟结果
-func (s *BundleStore) GetSimResult(hash common.Hash) (*SimMevBundleResponse, bool) {
+func (s *BundleStore) GetSimResult(hash common.Hash) (*types.SimMevBundleResponse, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	r, ok := s.simResults[hash]

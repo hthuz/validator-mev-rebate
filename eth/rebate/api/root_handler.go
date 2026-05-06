@@ -1,11 +1,11 @@
-package main
+package api
 
 import (
 	"net/http"
 )
 
 // NewRootHandler 创建根路径处理器，显示所有可用端点
-func NewRootHandler(api *MevShareAPI) http.Handler {
+func NewRootHandler(share_api *MevShareAPI) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// 根路径 GET 请求返回 HTML 页面
 		if r.URL.Path == "/" && r.Method == http.MethodGet {
@@ -17,7 +17,7 @@ func NewRootHandler(api *MevShareAPI) http.Handler {
 
 		// POST 请求或其他路径交给 JSON-RPC 处理器
 		if r.Method == http.MethodPost {
-			NewJSONRPCHandler(api).ServeHTTP(w, r)
+			NewJSONRPCHandler(share_api).ServeHTTP(w, r)
 			return
 		}
 

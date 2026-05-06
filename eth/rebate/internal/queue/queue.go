@@ -1,8 +1,10 @@
-package main
+package queue
 
 import (
 	"context"
 	"encoding/json"
+	"rebate/log"
+	"rebate/pkg/types"
 	"sync"
 	"time"
 )
@@ -11,19 +13,19 @@ import (
 
 // BundleQueueItem 队列中的 Bundle 项
 type BundleQueueItem struct {
-	Bundle      *SendMevBundleArgs
+	Bundle      *types.SendMevBundleArgs
 	TargetBlock uint64
-	Priority    bool      // 高优先级
+	Priority    bool // 高优先级
 	AddedAt     time.Time
 	Retries     int
 }
 
 // SimulationQueue 简单的内存队列
 type SimulationQueue struct {
-	mu          sync.Mutex
-	items       []*BundleQueueItem
-	cond        *sync.Cond
-	closed      bool
+	mu           sync.Mutex
+	items        []*BundleQueueItem
+	cond         *sync.Cond
+	closed       bool
 	currentBlock uint64
 }
 
@@ -37,7 +39,7 @@ func NewSimulationQueue() *SimulationQueue {
 }
 
 // Push 添加 Bundle 到队列
-func (q *SimulationQueue) Push(bundle *SendMevBundleArgs, priority bool) {
+func (q *SimulationQueue) Push(bundle *types.SendMevBundleArgs, priority bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -58,7 +60,7 @@ func (q *SimulationQueue) Push(bundle *SendMevBundleArgs, priority bool) {
 	// 唤醒等待的 worker
 	q.cond.Signal()
 
-	logger.Info().
+	log.Logger.Info().
 		Str("bundleHash", bundle.Metadata.BundleHash.Hex()).
 		Uint64("targetBlock", item.TargetBlock).
 		Bool("priority", priority).
@@ -133,7 +135,7 @@ func (q *SimulationQueue) cleanExpired() {
 		if maxBlock >= q.currentBlock {
 			newItems = append(newItems, item)
 		} else {
-			logger.Debug().
+			log.Logger.Debug().
 				Str("bundleHash", item.Bundle.Metadata.BundleHash.Hex()).
 				Uint64("maxBlock", maxBlock).
 				Uint64("currentBlock", q.currentBlock).
@@ -165,7 +167,7 @@ func (q *SimulationQueue) Requeue(item *BundleQueueItem) {
 
 	item.Retries++
 	if item.Retries > 5 {
-		logger.Warn().
+		log.Logger.Warn().
 			Str("bundleHash", item.Bundle.Metadata.BundleHash.Hex()).
 			Int("retries", item.Retries).
 			Msg("Bundle exceeded max retries, dropping")
@@ -179,13 +181,13 @@ func (q *SimulationQueue) Requeue(item *BundleQueueItem) {
 // ============== 序列化辅助 ==============
 
 // SerializeBundle 序列化 Bundle (用于存储/传输)
-func SerializeBundle(bundle *SendMevBundleArgs) ([]byte, error) {
+func SerializeBundle(bundle *types.SendMevBundleArgs) ([]byte, error) {
 	return json.Marshal(bundle)
 }
 
 // DeserializeBundle 反序列化 Bundle
-func DeserializeBundle(data []byte) (*SendMevBundleArgs, error) {
-	var bundle SendMevBundleArgs
+func DeserializeBundle(data []byte) (*types.SendMevBundleArgs, error) {
+	var bundle types.SendMevBundleArgs
 	if err := json.Unmarshal(data, &bundle); err != nil {
 		return nil, err
 	}

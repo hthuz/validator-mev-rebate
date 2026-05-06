@@ -6,59 +6,57 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"rebate/api"
+	"rebate/internal"
+	"rebate/internal/metrics"
+	"rebate/internal/queue"
+	"rebate/internal/sim"
+	"rebate/log"
 	"syscall"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/rs/zerolog"
 )
 
-// 全局 logger
-var logger zerolog.Logger
-
-func init() {
-	// 配置 zerolog
-	output := zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339}
-	logger = zerolog.New(output).With().Timestamp().Logger()
-}
+var logger = log.Logger
 
 func main() {
 	// 解析命令行参数
 	port := flag.String("port", "8080", "HTTP server port")
 	flag.Parse()
 
-	logger.Info().Msg("Starting Validator MEV Rebate Node...")
+	log.Logger.Info().Msg("Starting Validator MEV Rebate Node...")
 
 	// 1. 生成签名密钥 (用于 MatchingHash)
-	signer, err := GenerateSigner()
+	signer, err := sim.GenerateSigner()
 	if err != nil {
-		logger.Fatal().Err(err).Msg("Failed to generate signer")
+		log.Logger.Fatal().Err(err).Msg("Failed to generate signer")
 	}
-	logger.Info().Msg("Signer key generated")
+	log.Logger.Info().Msg("Signer key generated")
 
 	// 2. 创建组件
-	store := NewBundleStore()
-	queue := NewSimulationQueue()
-	simulator := NewMockSimulator()
-	hintBroadcaster := &LogHintBroadcaster{}
-	metricsStore := NewMetricsStore()
+	store := sim.NewBundleStore()
+	queue := queue.NewSimulationQueue()
+	simulator := sim.NewMockSimulator()
+	hintBroadcaster := &internal.LogHintBroadcaster{}
+	metricsStore := metrics.NewMetricsStore()
 
 	// 3. 创建 API
-	api := NewMevShareAPI(signer, queue, store, simulator)
+	share_api := api.NewMevShareAPI(signer, queue, store, simulator)
 
 	// 4. 创建模拟工作器
-	worker := NewSimulationWorker(simulator, queue, store, hintBroadcaster, signer, metricsStore)
+	worker := sim.NewSimulationWorker(simulator, queue, store, hintBroadcaster, signer, metricsStore)
 
 	// 5. 创建 HTTP 服务器
 	mux := http.NewServeMux()
-	mux.Handle("/", NewRootHandler(api))
+	mux.Handle("/", api.NewRootHandler(share_api))
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
 	})
 
 	// 添加指标查询端点
-	metricsHandler := NewMetricsHandler(metricsStore)
+	metricsHandler := metrics.NewMetricsHandler(metricsStore)
 	mux.HandleFunc("/metrics/block/", metricsHandler.GetBlockMetrics)
 	mux.HandleFunc("/metrics/validator/", metricsHandler.GetValidatorMetrics)
 	mux.HandleFunc("/metrics/validators", metricsHandler.GetAllValidators)
@@ -113,7 +111,7 @@ func main() {
 }
 
 // blockUpdater 模拟区块增长
-func blockUpdater(ctx context.Context, sim *MockSimulator, queue *SimulationQueue, metrics *MetricsStore) {
+func blockUpdater(ctx context.Context, sim *sim.MockSimulator, queue *queue.SimulationQueue, metrics *metrics.MetricsStore) {
 	ticker := time.NewTicker(12 * time.Second) // 12秒一个块 (以太坊主网)
 	defer ticker.Stop()
 
@@ -192,4 +190,3 @@ func printUsage(port string) {
 	logger.Info().Msg("Press Ctrl+C to stop")
 	logger.Info().Msg("=================================================")
 }
-

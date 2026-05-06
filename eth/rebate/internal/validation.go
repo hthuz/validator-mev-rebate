@@ -1,12 +1,14 @@
-package main
+package internal
 
 import (
 	"crypto/ecdsa"
 	"errors"
 	"fmt"
 
+	"rebate/pkg/types"
+
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/core/types"
+	etypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/rlp"
 	"golang.org/x/crypto/sha3"
@@ -15,10 +17,10 @@ import (
 // ============== 验证常量 ==============
 
 const (
-	MaxBlockOffset  = 5        // Bundle 不能计划太远的未来
-	MaxBlockRange   = 30       // maxBlock - blockNumber 不能超过 30
-	MaxBodySize     = 50       // Bundle 最多 50 个元素
-	MaxNestingLevel = 1        // Bundle 最多嵌套 1 层
+	MaxBlockOffset  = 5  // Bundle 不能计划太远的未来
+	MaxBlockRange   = 30 // maxBlock - blockNumber 不能超过 30
+	MaxBodySize     = 50 // Bundle 最多 50 个元素
+	MaxNestingLevel = 1  // Bundle 最多嵌套 1 层
 )
 
 // ============== 验证错误 ==============
@@ -44,11 +46,11 @@ var (
 
 // ValidateBundle 验证 Bundle 并计算 Hash
 // 返回: (bundleHash, hasUnmatchedHash, error)
-func ValidateBundle(bundle *SendMevBundleArgs, currentBlock uint64, signer *ecdsa.PrivateKey) (common.Hash, bool, error) {
+func ValidateBundle(bundle *types.SendMevBundleArgs, currentBlock uint64, signer *ecdsa.PrivateKey) (common.Hash, bool, error) {
 	return validateBundleInner(bundle, currentBlock, signer, 0)
 }
 
-func validateBundleInner(bundle *SendMevBundleArgs, currentBlock uint64, signer *ecdsa.PrivateKey, level int) (common.Hash, bool, error) {
+func validateBundleInner(bundle *types.SendMevBundleArgs, currentBlock uint64, signer *ecdsa.PrivateKey, level int) (common.Hash, bool, error) {
 	// 检查嵌套层级
 	if level > MaxNestingLevel {
 		return common.Hash{}, false, ErrNestingTooDeep
@@ -77,7 +79,7 @@ func validateBundleInner(bundle *SendMevBundleArgs, currentBlock uint64, signer 
 
 	// 5. 设置元数据
 	if bundle.Metadata == nil {
-		bundle.Metadata = &MevBundleMetadata{}
+		bundle.Metadata = &types.MevBundleMetadata{}
 	}
 	bundle.Metadata.BundleHash = bundleHash
 	bundle.Metadata.BodyHashes = bodyHashes
@@ -86,7 +88,7 @@ func validateBundleInner(bundle *SendMevBundleArgs, currentBlock uint64, signer 
 }
 
 // validateInclusion 验证 Inclusion 范围
-func validateInclusion(inclusion *MevBundleInclusion, currentBlock uint64) error {
+func validateInclusion(inclusion *types.MevBundleInclusion, currentBlock uint64) error {
 	blockNumber := uint64(inclusion.BlockNumber)
 	maxBlock := uint64(inclusion.MaxBlock)
 
@@ -114,7 +116,7 @@ func validateInclusion(inclusion *MevBundleInclusion, currentBlock uint64) error
 }
 
 // validateBody 验证 Body 并计算哈希
-func validateBody(body []MevBundleBody, currentBlock uint64, signer *ecdsa.PrivateKey, level int) (common.Hash, []common.Hash, bool, error) {
+func validateBody(body []types.MevBundleBody, currentBlock uint64, signer *ecdsa.PrivateKey, level int) (common.Hash, []common.Hash, bool, error) {
 	if len(body) == 0 {
 		return common.Hash{}, nil, false, ErrEmptyBody
 	}
@@ -148,7 +150,7 @@ func validateBody(body []MevBundleBody, currentBlock uint64, signer *ecdsa.Priva
 
 		if elem.Tx != nil {
 			// 解析并验证交易
-			var tx types.Transaction
+			var tx etypes.Transaction
 			if err := rlp.DecodeBytes(*elem.Tx, &tx); err != nil {
 				return common.Hash{}, nil, false, fmt.Errorf("%w: %v", ErrInvalidTransaction, err)
 			}
@@ -177,13 +179,13 @@ func validateBody(body []MevBundleBody, currentBlock uint64, signer *ecdsa.Priva
 	}
 
 	// 计算 Bundle Hash = keccak256(hash1 || hash2 || ...)
-	bundleHash := calculateBundleHash(bodyHashes)
+	bundleHash := CalculateBundleHash(bodyHashes)
 
 	return bundleHash, bodyHashes, hasUnmatchedHash, nil
 }
 
 // validateValidity 验证退款配置
-func validateValidity(validity *MevBundleValidity, bodyLen int) error {
+func validateValidity(validity *types.MevBundleValidity, bodyLen int) error {
 	if validity == nil {
 		return nil
 	}
@@ -213,8 +215,8 @@ func validateValidity(validity *MevBundleValidity, bodyLen int) error {
 	return nil
 }
 
-// calculateBundleHash 计算 Bundle 哈希
-func calculateBundleHash(hashes []common.Hash) common.Hash {
+// CalculateBundleHash 计算 Bundle 哈希
+func CalculateBundleHash(hashes []common.Hash) common.Hash {
 	hasher := sha3.NewLegacyKeccak256()
 	for _, h := range hashes {
 		hasher.Write(h[:])
@@ -224,9 +226,9 @@ func calculateBundleHash(hashes []common.Hash) common.Hash {
 	return result
 }
 
-// calculateMatchingHash 计算用于 Hint 匹配的哈希
+// CalculateMatchingHash 计算用于 Hint 匹配的哈希
 // 这个哈希用于搜索者引用 Bundle 进行 backrun
-func calculateMatchingHash(bundleHash common.Hash, signer *ecdsa.PrivateKey) common.Hash {
+func CalculateMatchingHash(bundleHash common.Hash, signer *ecdsa.PrivateKey) common.Hash {
 	// 使用签名者私钥对 Bundle Hash 签名，然后取哈希
 	sig, err := crypto.Sign(bundleHash[:], signer)
 	if err != nil {
@@ -237,13 +239,13 @@ func calculateMatchingHash(bundleHash common.Hash, signer *ecdsa.PrivateKey) com
 
 // GetTransactionSender 获取交易签名者地址
 func GetTransactionSender(txBytes []byte) (common.Address, error) {
-	var tx types.Transaction
+	var tx etypes.Transaction
 	if err := rlp.DecodeBytes(txBytes, &tx); err != nil {
 		return common.Address{}, err
 	}
 
-	signer := types.LatestSignerForChainID(tx.ChainId())
-	sender, err := types.Sender(signer, &tx)
+	signer := etypes.LatestSignerForChainID(tx.ChainId())
+	sender, err := etypes.Sender(signer, &tx)
 	if err != nil {
 		return common.Address{}, err
 	}

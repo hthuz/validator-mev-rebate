@@ -1,11 +1,14 @@
-package main
+package internal
 
 import (
 	"math/big"
 
+	"rebate/log"
+	"rebate/pkg/types"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
-	"github.com/ethereum/go-ethereum/core/types"
+	etypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/rlp"
 )
 
@@ -31,13 +34,13 @@ var SpecialLogTopics = map[common.Hash]bool{
 // ============== Hint 提取函数 ==============
 
 // ExtractHints 从 Bundle 和模拟结果中提取 Hints
-func ExtractHints(bundle *SendMevBundleArgs, simResult *SimMevBundleResponse) *Hint {
-	if bundle.Privacy == nil || bundle.Privacy.Hints == HintNone {
+func ExtractHints(bundle *types.SendMevBundleArgs, simResult *types.SimMevBundleResponse) *types.Hint {
+	if bundle.Privacy == nil || bundle.Privacy.Hints == types.HintNone {
 		return nil
 	}
 
 	hints := bundle.Privacy.Hints
-	hint := &Hint{
+	hint := &types.Hint{
 		Hash: bundle.Metadata.MatchingHash,
 	}
 
@@ -45,7 +48,7 @@ func ExtractHints(bundle *SendMevBundleArgs, simResult *SimMevBundleResponse) *H
 	hint.Txs = extractTxHints(bundle.Body, hints)
 
 	// 提取日志 Hints (从模拟结果)
-	if simResult != nil && (hints.Has(HintLogs) || hints.Has(HintSpecialLogs)) {
+	if simResult != nil && (hints.Has(types.HintLogs) || hints.Has(types.HintSpecialLogs)) {
 		hint.Logs = extractLogHints(simResult.BodyLogs, hints)
 	}
 
@@ -66,29 +69,29 @@ func ExtractHints(bundle *SendMevBundleArgs, simResult *SimMevBundleResponse) *H
 }
 
 // extractTxHints 提取交易相关的 Hints
-func extractTxHints(body []MevBundleBody, hints HintIntent) []TxHint {
-	var txHints []TxHint
+func extractTxHints(body []types.MevBundleBody, hints types.HintIntent) []types.TxHint {
+	var txHints []types.TxHint
 
 	for _, elem := range body {
 		if elem.Tx == nil {
 			continue
 		}
 
-		var tx types.Transaction
+		var tx etypes.Transaction
 		if err := rlp.DecodeBytes(*elem.Tx, &tx); err != nil {
 			continue
 		}
 
-		txHint := TxHint{}
+		txHint := types.TxHint{}
 
 		// 交易哈希
-		if hints.Has(HintTxHash) || hints.Has(HintHash) {
+		if hints.Has(types.HintTxHash) || hints.Has(types.HintHash) {
 			hash := tx.Hash()
 			txHint.Hash = &hash
 		}
 
 		// 合约地址
-		if hints.Has(HintContractAddress) {
+		if hints.Has(types.HintContractAddress) {
 			to := tx.To()
 			if to != nil {
 				txHint.To = to
@@ -96,13 +99,13 @@ func extractTxHints(body []MevBundleBody, hints HintIntent) []TxHint {
 		}
 
 		// 函数选择器 (前4字节)
-		if hints.Has(HintFunctionSelector) && len(tx.Data()) >= 4 {
+		if hints.Has(types.HintFunctionSelector) && len(tx.Data()) >= 4 {
 			selector := hexutil.Bytes(tx.Data()[:4])
 			txHint.FunctionSelector = &selector
 		}
 
 		// 完整调用数据
-		if hints.Has(HintCallData) && len(tx.Data()) > 0 {
+		if hints.Has(types.HintCallData) && len(tx.Data()) > 0 {
 			callData := hexutil.Bytes(tx.Data())
 			txHint.CallData = &callData
 		}
@@ -114,21 +117,21 @@ func extractTxHints(body []MevBundleBody, hints HintIntent) []TxHint {
 }
 
 // extractLogHints 提取日志相关的 Hints
-func extractLogHints(bodyLogs []SimMevBodyLogs, hints HintIntent) []CleanLog {
-	var cleanLogs []CleanLog
+func extractLogHints(bodyLogs []types.SimMevBodyLogs, hints types.HintIntent) []types.CleanLog {
+	var cleanLogs []types.CleanLog
 
 	for _, logs := range bodyLogs {
 		for _, log := range logs.TxLogs {
 			// 如果只要求 SpecialLogs, 过滤非特殊日志
-			if hints.Has(HintSpecialLogs) && !hints.Has(HintLogs) {
+			if hints.Has(types.HintSpecialLogs) && !hints.Has(types.HintLogs) {
 				if !isSpecialLog(log) {
 					continue
 				}
 				// 对于特殊日志, 只保留签名和池地址
 				cleanLogs = append(cleanLogs, cleanSpecialLog(log))
-			} else if hints.Has(HintLogs) {
+			} else if hints.Has(types.HintLogs) {
 				// 完整日志
-				cleanLogs = append(cleanLogs, CleanLog{
+				cleanLogs = append(cleanLogs, types.CleanLog{
 					Address: log.Address,
 					Topics:  log.Topics,
 					Data:    log.Data,
@@ -147,7 +150,7 @@ func extractLogHints(bodyLogs []SimMevBodyLogs, hints HintIntent) []CleanLog {
 }
 
 // isSpecialLog 检查是否为特殊日志 (DEX 事件)
-func isSpecialLog(log SimLog) bool {
+func isSpecialLog(log types.SimLog) bool {
 	if len(log.Topics) == 0 {
 		return false
 	}
@@ -155,8 +158,8 @@ func isSpecialLog(log SimLog) bool {
 }
 
 // cleanSpecialLog 清理特殊日志 (只保留签名和池地址)
-func cleanSpecialLog(log SimLog) CleanLog {
-	clean := CleanLog{
+func cleanSpecialLog(log types.SimLog) types.CleanLog {
+	clean := types.CleanLog{
 		Address: log.Address,
 	}
 
@@ -202,14 +205,14 @@ func reduceIntPrecision(n *big.Int, precision int) *big.Int {
 
 // HintBroadcaster Hint 广播器接口
 type HintBroadcaster interface {
-	Broadcast(hint *Hint) error
+	Broadcast(hint *types.Hint) error
 }
 
 // LogHintBroadcaster 简单的日志广播器 (用于 demo)
 type LogHintBroadcaster struct{}
 
-func (b *LogHintBroadcaster) Broadcast(hint *Hint) error {
-	logger.Info().
+func (b *LogHintBroadcaster) Broadcast(hint *types.Hint) error {
+	log.Logger.Info().
 		Str("matchingHash", hint.Hash.Hex()).
 		Int("txCount", len(hint.Txs)).
 		Int("logCount", len(hint.Logs)).

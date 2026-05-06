@@ -1,7 +1,8 @@
-package main
+package metrics
 
 import (
 	"math/big"
+	"rebate/pkg/types"
 	"sync"
 	"time"
 
@@ -48,7 +49,7 @@ func NewBlockMevMetrics(blockNumber uint64, validator common.Address) *BlockMevM
 }
 
 // AddBundleResult 添加 bundle 结果到区块指标
-func (b *BlockMevMetrics) AddBundleResult(result *SimMevBundleResponse, builder string) {
+func (b *BlockMevMetrics) AddBundleResult(result *types.SimMevBundleResponse, builder string) {
 	b.BundleCount++
 
 	if result.Success {
@@ -126,10 +127,10 @@ type BlockMevSummary struct {
 // NewValidatorMetrics 创建新的 Validator 指标
 func NewValidatorMetrics(address common.Address, firstBlock uint64) *ValidatorMetrics {
 	return &ValidatorMetrics{
-		Address:        address,
-		FirstSeenBlock: firstBlock,
-		LastSeenBlock:  firstBlock,
-		UpdatedAt:      time.Now(),
+		Address:         address,
+		FirstSeenBlock:  firstBlock,
+		LastSeenBlock:   firstBlock,
+		UpdatedAt:       time.Now(),
 		TotalMevRevenue: big.NewInt(0),
 		TotalRefunded:   big.NewInt(0),
 		AvgMevPerBlock:  big.NewInt(0),
@@ -224,11 +225,11 @@ type SearcherMetrics struct {
 	FailedBundles  uint64         `json:"failedBundles"`
 	SuccessRate    float64        `json:"successRate"`
 
-	TotalProfit     *big.Int `json:"totalProfit"`
-	AvgProfit       *big.Int `json:"avgProfit"`
-	BackrunCount    uint64   `json:"backrunCount"`
-	BackrunSuccess  uint64   `json:"backrunSuccess"`
-	BackrunProfit   *big.Int `json:"backrunProfit"`
+	TotalProfit    *big.Int `json:"totalProfit"`
+	AvgProfit      *big.Int `json:"avgProfit"`
+	BackrunCount   uint64   `json:"backrunCount"`
+	BackrunSuccess uint64   `json:"backrunSuccess"`
+	BackrunProfit  *big.Int `json:"backrunProfit"`
 
 	FirstSeen time.Time `json:"firstSeen"`
 	LastSeen  time.Time `json:"lastSeen"`
@@ -293,7 +294,7 @@ func (m *MetricsStore) FinalizeBlock(blockNumber uint64, blockGasLimit uint64) {
 }
 
 // RecordBundleResult 记录 bundle 执行结果
-func (m *MetricsStore) RecordBundleResult(blockNumber uint64, result *SimMevBundleResponse, builder string, searcher common.Address) {
+func (m *MetricsStore) RecordBundleResult(blockNumber uint64, result *types.SimMevBundleResponse, builder string, searcher common.Address) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -307,7 +308,7 @@ func (m *MetricsStore) RecordBundleResult(blockNumber uint64, result *SimMevBund
 }
 
 // updateSearcherMetrics 更新搜索者指标
-func (m *MetricsStore) updateSearcherMetrics(searcher common.Address, result *SimMevBundleResponse, blockNumber uint64) {
+func (m *MetricsStore) updateSearcherMetrics(searcher common.Address, result *types.SimMevBundleResponse, blockNumber uint64) {
 	sm, exists := m.searcherMetrics[searcher]
 	if !exists {
 		sm = &SearcherMetrics{
