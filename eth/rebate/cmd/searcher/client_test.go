@@ -8,6 +8,7 @@ import (
 	"rebate/internal/queue"
 	"rebate/internal/sim"
 	"rebate/pkg/types"
+	"rebate/pkg/utils"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -325,7 +326,7 @@ func ExampleUsage() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	signer, _ := sim.GenerateSigner()
+	signer, _ := utils.GenerateSigner()
 	store := sim.NewBundleStore()
 	queue := queue.NewSimulationQueue()
 	simulator := sim.NewMockSimulator()

@@ -1,4 +1,4 @@
-package internal
+package utils
 
 import (
 	"crypto/ecdsa"
@@ -9,9 +9,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	etypes "github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/rlp"
-	"golang.org/x/crypto/sha3"
 )
 
 // ============== 验证常量 ==============
@@ -213,42 +211,4 @@ func validateValidity(validity *types.MevBundleValidity, bodyLen int) error {
 	}
 
 	return nil
-}
-
-// CalculateBundleHash 计算 Bundle 哈希
-func CalculateBundleHash(hashes []common.Hash) common.Hash {
-	hasher := sha3.NewLegacyKeccak256()
-	for _, h := range hashes {
-		hasher.Write(h[:])
-	}
-	var result common.Hash
-	copy(result[:], hasher.Sum(nil))
-	return result
-}
-
-// CalculateMatchingHash 计算用于 Hint 匹配的哈希
-// 这个哈希用于搜索者引用 Bundle 进行 backrun
-func CalculateMatchingHash(bundleHash common.Hash, signer *ecdsa.PrivateKey) common.Hash {
-	// 使用签名者私钥对 Bundle Hash 签名，然后取哈希
-	sig, err := crypto.Sign(bundleHash[:], signer)
-	if err != nil {
-		return bundleHash // 降级为使用原始哈希
-	}
-	return crypto.Keccak256Hash(sig)
-}
-
-// GetTransactionSender 获取交易签名者地址
-func GetTransactionSender(txBytes []byte) (common.Address, error) {
-	var tx etypes.Transaction
-	if err := rlp.DecodeBytes(txBytes, &tx); err != nil {
-		return common.Address{}, err
-	}
-
-	signer := etypes.LatestSignerForChainID(tx.ChainId())
-	sender, err := etypes.Sender(signer, &tx)
-	if err != nil {
-		return common.Address{}, err
-	}
-
-	return sender, nil
 }

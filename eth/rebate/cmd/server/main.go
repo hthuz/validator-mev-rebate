@@ -7,11 +7,12 @@ import (
 	"os"
 	"os/signal"
 	"rebate/api"
-	"rebate/internal"
+	"rebate/internal/hints"
 	"rebate/internal/metrics"
 	"rebate/internal/queue"
 	"rebate/internal/sim"
 	"rebate/log"
+	"rebate/pkg/utils"
 	"syscall"
 	"time"
 
@@ -28,7 +29,7 @@ func main() {
 	log.Logger.Info().Msg("Starting Validator MEV Rebate Node...")
 
 	// 1. 生成签名密钥 (用于 MatchingHash)
-	signer, err := sim.GenerateSigner()
+	signer, err := utils.GenerateSigner()
 	if err != nil {
 		log.Logger.Fatal().Err(err).Msg("Failed to generate signer")
 	}
@@ -38,7 +39,7 @@ func main() {
 	store := sim.NewBundleStore()
 	queue := queue.NewSimulationQueue()
 	simulator := sim.NewMockSimulator()
-	hintBroadcaster := &internal.LogHintBroadcaster{}
+	hintBroadcaster := &hints.LogHintBroadcaster{}
 	metricsStore := metrics.NewMetricsStore()
 
 	// 3. 创建 API

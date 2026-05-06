@@ -2,7 +2,6 @@ package queue
 
 import (
 	"context"
-	"encoding/json"
 	"rebate/log"
 	"rebate/pkg/types"
 	"sync"
@@ -176,20 +175,4 @@ func (q *SimulationQueue) Requeue(item *BundleQueueItem) {
 
 	q.items = append(q.items, item)
 	q.cond.Signal()
-}
-
-// ============== 序列化辅助 ==============
-
-// SerializeBundle 序列化 Bundle (用于存储/传输)
-func SerializeBundle(bundle *types.SendMevBundleArgs) ([]byte, error) {
-	return json.Marshal(bundle)
-}
-
-// DeserializeBundle 反序列化 Bundle
-func DeserializeBundle(data []byte) (*types.SendMevBundleArgs, error) {
-	var bundle types.SendMevBundleArgs
-	if err := json.Unmarshal(data, &bundle); err != nil {
-		return nil, err
-	}
-	return &bundle, nil
 }

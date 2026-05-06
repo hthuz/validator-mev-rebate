@@ -1,4 +1,4 @@
-package internal
+package hints
 
 import (
 	"math/big"

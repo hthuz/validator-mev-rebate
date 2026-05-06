@@ -3,15 +3,13 @@ package api
 import (
 	"context"
 	"crypto/ecdsa"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
-	"rebate/internal"
 	"rebate/internal/queue"
 	"rebate/internal/sim"
 	"rebate/log"
 	"rebate/pkg/types"
+	"rebate/pkg/utils"
 	"sync"
 	"time"
 
@@ -81,7 +79,7 @@ func (api *MevShareAPI) SendBundle(ctx context.Context, args types.SendMevBundle
 	currentBlock := api.getCurrentBlock()
 
 	// 2. 验证 Bundle
-	bundleHash, hasUnmatchedHash, err := internal.ValidateBundle(&args, currentBlock, api.signer)
+	bundleHash, hasUnmatchedHash, err := utils.ValidateBundle(&args, currentBlock, api.signer)
 	if err != nil {
 		log.Logger.Warn().Err(err).Msg("Bundle validation failed")
 		return nil, fmt.Errorf("validation failed: %w", err)
@@ -157,7 +155,7 @@ func (api *MevShareAPI) handleBackrun(ctx context.Context, bundle *types.SendMev
 	// 重新计算 Bundle Hash
 	bodyHashes := []common.Hash{targetBundle.Metadata.BundleHash}
 	bodyHashes = append(bodyHashes, bundle.Metadata.BodyHashes[1:]...)
-	bundle.Metadata.BundleHash = internal.CalculateBundleHash(bodyHashes)
+	bundle.Metadata.BundleHash = utils.CalculateBundleHash(bodyHashes)
 	bundle.Metadata.BodyHashes = bodyHashes
 
 	log.Logger.Info().
@@ -184,7 +182,7 @@ func (api *MevShareAPI) SimBundle(ctx context.Context, args types.SendMevBundleA
 
 	// 验证 Bundle
 	currentBlock := api.getCurrentBlock()
-	_, _, err := internal.ValidateBundle(&args, currentBlock, api.signer)
+	_, _, err := utils.ValidateBundle(&args, currentBlock, api.signer)
 	if err != nil {
 		return nil, fmt.Errorf("validation failed: %w", err)
 	}
@@ -222,170 +220,4 @@ func (api *MevShareAPI) getCurrentBlock() uint64 {
 		return sim.GetBlock()
 	}
 	return 1000000 // 默认值
-}
-
-// ============== JSON-RPC 服务器 ==============
-
-// JSONRPCRequest JSON-RPC 请求
-type JSONRPCRequest struct {
-	JSONRPC string          `json:"jsonrpc"`
-	Method  string          `json:"method"`
-	Params  json.RawMessage `json:"params"`
-	ID      interface{}     `json:"id"`
-}
-
-// JSONRPCResponse JSON-RPC 响应
-type JSONRPCResponse struct {
-	JSONRPC string        `json:"jsonrpc"`
-	Result  interface{}   `json:"result,omitempty"`
-	Error   *JSONRPCError `json:"error,omitempty"`
-	ID      interface{}   `json:"id"`
-}
-
-// JSONRPCError JSON-RPC 错误
-type JSONRPCError struct {
-	Code    int         `json:"code"`
-	Message string      `json:"message"`
-	Data    interface{} `json:"data,omitempty"`
-}
-
-// NewJSONRPCHandler 创建 JSON-RPC 处理器
-func NewJSONRPCHandler(api *MevShareAPI) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		var req JSONRPCRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeJSONRPCError(w, nil, -32700, "Parse error", nil)
-			return
-		}
-
-		ctx := r.Context()
-		var result interface{}
-		var rpcErr *JSONRPCError
-
-		switch req.Method {
-		case SendBundleMethod:
-			result, rpcErr = handleSendBundle(ctx, api, req.Params)
-		case SimBundleMethod:
-			result, rpcErr = handleSimBundle(ctx, api, req.Params)
-		case CancelBundleByHash:
-			result, rpcErr = handleCancelBundle(ctx, api, req.Params)
-		default:
-			rpcErr = &JSONRPCError{Code: -32601, Message: "Method not found"}
-		}
-
-		writeJSONRPCResponse(w, req.ID, result, rpcErr)
-	})
-}
-
-func handleSendBundle(ctx context.Context, api *MevShareAPI, params json.RawMessage) (interface{}, *JSONRPCError) {
-	var args []types.SendMevBundleArgs
-	if err := json.Unmarshal(params, &args); err != nil || len(args) == 0 {
-		return nil, &JSONRPCError{Code: -32602, Message: "Invalid params"}
-	}
-
-	result, err := api.SendBundle(ctx, args[0])
-	if err != nil {
-		return nil, &JSONRPCError{Code: -32000, Message: err.Error()}
-	}
-	return result, nil
-}
-
-func handleSimBundle(ctx context.Context, api *MevShareAPI, params json.RawMessage) (interface{}, *JSONRPCError) {
-	var args []types.SendMevBundleArgs
-	if err := json.Unmarshal(params, &args); err != nil || len(args) == 0 {
-		return nil, &JSONRPCError{Code: -32602, Message: "Invalid params"}
-	}
-
-	result, err := api.SimBundle(ctx, args[0])
-	if err != nil {
-		return nil, &JSONRPCError{Code: -32000, Message: err.Error()}
-	}
-	return result, nil
-}
-
-func handleCancelBundle(ctx context.Context, api *MevShareAPI, params json.RawMessage) (interface{}, *JSONRPCError) {
-	var args []common.Hash
-	if err := json.Unmarshal(params, &args); err != nil || len(args) == 0 {
-		return nil, &JSONRPCError{Code: -32602, Message: "Invalid params"}
-	}
-
-	result, err := api.CancelBundleByHash(ctx, args[0])
-	if err != nil {
-		return nil, &JSONRPCError{Code: -32000, Message: err.Error()}
-	}
-	return result, nil
-}
-
-func writeJSONRPCResponse(w http.ResponseWriter, id interface{}, result interface{}, rpcErr *JSONRPCError) {
-	resp := JSONRPCResponse{
-		JSONRPC: "2.0",
-		ID:      id,
-		Result:  result,
-		Error:   rpcErr,
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
-}
-
-func writeJSONRPCError(w http.ResponseWriter, id interface{}, code int, message string, data interface{}) {
-	writeJSONRPCResponse(w, id, nil, &JSONRPCError{
-		Code:    code,
-		Message: message,
-		Data:    data,
-	})
-}
-
-// ============== 速率限制器 ==============
-
-// RateLimiter 简单的速率限制器
-type RateLimiter struct {
-	mu       sync.Mutex
-	tokens   int
-	maxToken int
-	interval time.Duration
-	lastTime time.Time
-}
-
-// NewRateLimiter 创建速率限制器
-func NewRateLimiter(maxToken int, interval time.Duration) *RateLimiter {
-	return &RateLimiter{
-		tokens:   maxToken,
-		maxToken: maxToken,
-		interval: interval,
-		lastTime: time.Now(),
-	}
-}
-
-// Allow 检查是否允许请求
-func (r *RateLimiter) Allow() bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	now := time.Now()
-	elapsed := now.Sub(r.lastTime)
-
-	// 补充 tokens
-	if elapsed >= r.interval {
-		r.tokens = r.maxToken
-		r.lastTime = now
-	}
-
-	if r.tokens > 0 {
-		r.tokens--
-		return true
-	}
-	return false
-}
-
-// min 返回较小值
-func min(a, b uint64) uint64 {
-	if a < b {
-		return a
-	}
-	return b
 }
