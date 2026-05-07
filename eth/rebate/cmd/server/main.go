@@ -7,11 +7,11 @@ import (
 	"os"
 	"os/signal"
 	"rebate/api"
-	"rebate/internal/hints"
 	"rebate/internal/metrics"
 	"rebate/internal/queue"
 	"rebate/internal/sim"
-	"rebate/log"
+	"rebate/internal/sse"
+	"rebate/mylog"
 	"rebate/pkg/utils"
 	"syscall"
 	"time"
@@ -19,7 +19,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
-var logger = log.Logger
+var logger = mylog.Logger
 
 func main() {
 	// 解析命令行参数
@@ -31,7 +31,7 @@ func main() {
 	// 1. 生成签名密钥 (用于 MatchingHash)
 	signer, err := utils.GenerateSigner()
 	if err != nil {
-		log.Logger.Fatal().Err(err).Msg("Failed to generate signer")
+		mylog.Logger.Fatal().Err(err).Msg("Failed to generate signer")
 	}
 	logger.Info().Msg("Signer key generated")
 
@@ -39,7 +39,7 @@ func main() {
 	store := sim.NewBundleStore()
 	queue := queue.NewSimulationQueue()
 	simulator := sim.NewMockSimulator()
-	hintBroadcaster := &hints.LogHintBroadcaster{}
+	hintBroadcaster := sse.NewHub()
 	metricsStore := metrics.NewMetricsStore()
 
 	// 3. 创建 API
@@ -51,6 +51,7 @@ func main() {
 	// 5. 创建 HTTP 服务器
 	mux := http.NewServeMux()
 	mux.Handle("/", api.NewRootHandler(share_api))
+	mux.HandleFunc("/events", api.NewSSEHandler(hintBroadcaster))
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
@@ -166,6 +167,7 @@ func printUsage(port string) {
 	logger.Info().Msg("  - eth_cancelBundleByHash : Cancel a bundle")
 	logger.Info().Msg("")
 	logger.Info().Msg("Metrics Endpoints:")
+	logger.Info().Msg("  GET /events                         : SSE 订阅 hint 推流 (Searcher 使用)")
 	logger.Info().Msg("  GET /metrics/block/{blockNumber}    : 获取指定区块的 MEV 指标")
 	logger.Info().Msg("  GET /metrics/validator/{address}    : 获取指定 Validator 的历史表现")
 	logger.Info().Msg("  GET /metrics/validators             : 获取所有 Validators 的列表")

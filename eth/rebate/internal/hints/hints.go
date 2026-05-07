@@ -3,7 +3,7 @@ package hints
 import (
 	"math/big"
 
-	"rebate/log"
+	"rebate/mylog"
 	"rebate/pkg/types"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -212,7 +212,7 @@ type HintBroadcaster interface {
 type LogHintBroadcaster struct{}
 
 func (b *LogHintBroadcaster) Broadcast(hint *types.Hint) error {
-	log.Logger.Info().
+	mylog.Logger.Info().
 		Str("matchingHash", hint.Hash.Hex()).
 		Int("txCount", len(hint.Txs)).
 		Int("logCount", len(hint.Logs)).

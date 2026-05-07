@@ -3,15 +3,30 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"log"
 	"net/http"
+	"rebate/mylog"
 	"rebate/pkg/types"
 	"rebate/pkg/utils"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common/hexutil"
 )
 
+var logger = mylog.Logger
+
 func main() {
+	SendMultipleTx()
+
+}
+func SendMultipleTx() {
+	for {
+		SendSingleTx()
+		time.Sleep(2 * time.Second)
+	}
+
+}
+
+func SendSingleTx() {
 
 	// 构造请求
 	tx, err := utils.CreateTestTx()
@@ -28,15 +43,19 @@ func main() {
 				"body": []map[string]interface{}{
 					{"tx": hexutil.Encode(tx)},
 				},
+				"privacy": map[string]interface{}{
+					"hints": 84, // HintHash(16) | HintTxHash(64) | HintLogs(4)
+				},
 			},
 		},
 		"id": 1,
 	}
 
 	body, _ := json.Marshal(reqBody)
+	logger.Info().Msg("sending req")
 	resp, err := http.Post("http://localhost:8080", "application/json", bytes.NewReader(body))
 	if err != nil {
-		log.Fatal(err)
+		logger.Err(err).Msg("err")
 	}
 	defer resp.Body.Close()
 
@@ -44,8 +63,8 @@ func main() {
 	json.NewDecoder(resp.Body).Decode(&result)
 
 	if result.Error != nil {
-		log.Println(result.Error)
+		logger.Fatal().Any("err", result.Error).Msg("rpc error")
 	}
 
-	log.Println("RPC response: %+v", result.Result)
+	logger.Info().Any("RPC response", result.Result).Msg("received resp")
 }

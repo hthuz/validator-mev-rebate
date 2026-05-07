@@ -3,7 +3,7 @@ package sim
 import (
 	"context"
 	"math/big"
-	"rebate/log"
+	"rebate/mylog"
 	"rebate/pkg/types"
 	"sync"
 	"time"
@@ -56,7 +56,7 @@ func (m *MockSimulator) SimulateBundle(ctx context.Context, bundle *types.SendMe
 		BodyLogs:        bodyLogs,
 	}
 
-	log.Logger.Debug().
+	mylog.Logger.Debug().
 		Str("bundleHash", bundle.Metadata.BundleHash.Hex()).
 		Uint64("stateBlock", currentBlock).
 		Uint64("gasUsed", gasUsed).

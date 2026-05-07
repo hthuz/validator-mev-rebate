@@ -8,7 +8,7 @@ import (
 	"rebate/internal/hints"
 	"rebate/internal/metrics"
 	"rebate/internal/queue"
-	"rebate/log"
+	"rebate/mylog"
 	"rebate/pkg/types"
 	"rebate/pkg/utils"
 
@@ -53,14 +53,14 @@ func NewSimulationWorker(
 func (w *SimulationWorker) Start(ctx context.Context) {
 	w.wg.Add(1)
 	go w.run(ctx)
-	log.Logger.Info().Msg("Simulation worker started")
+	mylog.Logger.Info().Msg("Simulation worker started")
 }
 
 // Stop 停止工作器
 func (w *SimulationWorker) Stop() {
 	close(w.stopCh)
 	w.wg.Wait()
-	log.Logger.Info().Msg("Simulation worker stopped")
+	mylog.Logger.Info().Msg("Simulation worker stopped")
 }
 
 // run 工作器主循环
@@ -82,7 +82,7 @@ func (w *SimulationWorker) run(ctx context.Context) {
 
 			// 处理 Bundle
 			if err := w.process(ctx, item); err != nil {
-				log.Logger.Error().
+				mylog.Logger.Error().
 					Err(err).
 					Str("bundleHash", item.Bundle.Metadata.BundleHash.Hex()).
 					Msg("Failed to process bundle")
@@ -98,7 +98,7 @@ func (w *SimulationWorker) run(ctx context.Context) {
 func (w *SimulationWorker) process(ctx context.Context, item *queue.BundleQueueItem) error {
 	bundle := item.Bundle
 
-	log.Logger.Info().
+	mylog.Logger.Info().
 		Str("bundleHash", bundle.Metadata.BundleHash.Hex()).
 		Uint64("targetBlock", item.TargetBlock).
 		Int("retry", item.Retries).
@@ -106,7 +106,7 @@ func (w *SimulationWorker) process(ctx context.Context, item *queue.BundleQueueI
 
 	// 1. 检查是否已取消
 	if w.store.IsCancelled(bundle.Metadata.BundleHash) {
-		log.Logger.Info().
+		mylog.Logger.Info().
 			Str("bundleHash", bundle.Metadata.BundleHash.Hex()).
 			Msg("Bundle was cancelled, skipping")
 		return nil
@@ -138,7 +138,7 @@ func (w *SimulationWorker) process(ctx context.Context, item *queue.BundleQueueI
 
 	// 5. 检查模拟结果
 	if !result.Success {
-		log.Logger.Warn().
+		mylog.Logger.Warn().
 			Str("bundleHash", bundle.Metadata.BundleHash.Hex()).
 			Str("error", result.Error).
 			Str("execError", result.ExecError).
@@ -157,7 +157,7 @@ func (w *SimulationWorker) process(ctx context.Context, item *queue.BundleQueueI
 		hint := hints.ExtractHints(bundle, result)
 		if hint != nil {
 			if err := w.hintBroadcast.Broadcast(hint); err != nil {
-				log.Logger.Error().Err(err).Msg("Failed to broadcast hint")
+				mylog.Logger.Error().Err(err).Msg("Failed to broadcast hint")
 			}
 		}
 	}
@@ -168,7 +168,7 @@ func (w *SimulationWorker) process(ctx context.Context, item *queue.BundleQueueI
 	// 9. 发送给 Builder (简化版: 只记录日志)
 	w.sendToBuilders(bundle, result)
 
-	log.Logger.Info().
+	mylog.Logger.Info().
 		Str("bundleHash", bundle.Metadata.BundleHash.Hex()).
 		Uint64("gasUsed", uint64(result.GasUsed)).
 		Str("profit", result.Profit.ToInt().String()).
@@ -185,7 +185,7 @@ func (w *SimulationWorker) sendToBuilders(bundle *types.SendMevBundleArgs, resul
 	}
 
 	for _, builder := range builders {
-		log.Logger.Info().
+		mylog.Logger.Info().
 			Str("bundleHash", bundle.Metadata.BundleHash.Hex()).
 			Str("builder", builder).
 			Msg("Sending bundle to builder (simulated)")
