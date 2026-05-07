@@ -1,0 +1,20 @@
+server:
+  port: 8080
+
+# 注册到分发器的 builder 节点
+# score 越高，获得的 bundle 比例越大（加权随机）
+dispatcher:
+  builders:
+    - name: builder-alpha
+      url: http://localhost:18545
+      score: 3.0
+    - name: builder-beta
+      url: http://localhost:18546
+      score: 1.0
+
+# 本地启动的 mock builder 节点（仅用于开发/测试）
+mock_builders:
+  - name: builder-alpha
+    addr: :18545
+  - name: builder-beta
+    addr: :18546

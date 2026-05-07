@@ -15,3 +15,12 @@ MEV rebate with emphasis on validator performance
 
 
 https://mev-share.flashbots.net/
+
+  启动方式：                                                                                                                      
+  # 使用默认路径 config/config.yaml                                                                                               
+  go run ./cmd/server/main.go                                                                                                     
+                                                                                                                                  
+  # 指定配置文件                                                                                                                  
+  go run ./cmd/server/main.go -config /path/to/my-config.yaml                                                                     
+                                                                                                                                  
+  环境变量也可以覆盖配置，例如 REBATE_SERVER_PORT=9090。

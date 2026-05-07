@@ -5,6 +5,7 @@ import (
 	"crypto/ecdsa"
 	"sync"
 
+	"rebate/internal/builder"
 	"rebate/internal/hints"
 	"rebate/internal/metrics"
 	"rebate/internal/queue"
@@ -25,6 +26,7 @@ type SimulationWorker struct {
 	hintBroadcast hints.HintBroadcaster
 	signer        *ecdsa.PrivateKey
 	metrics       *metrics.MetricsStore
+	dispatcher    *builder.Dispatcher
 	wg            sync.WaitGroup
 	stopCh        chan struct{}
 }
@@ -37,6 +39,7 @@ func NewSimulationWorker(
 	hintBroadcast hints.HintBroadcaster,
 	signer *ecdsa.PrivateKey,
 	metrics *metrics.MetricsStore,
+	dispatcher *builder.Dispatcher,
 ) *SimulationWorker {
 	return &SimulationWorker{
 		simulator:     simulator,
@@ -45,6 +48,7 @@ func NewSimulationWorker(
 		hintBroadcast: hintBroadcast,
 		signer:        signer,
 		metrics:       metrics,
+		dispatcher:    dispatcher,
 		stopCh:        make(chan struct{}),
 	}
 }
@@ -177,17 +181,16 @@ func (w *SimulationWorker) process(ctx context.Context, item *queue.BundleQueueI
 	return nil
 }
 
-// sendToBuilders 发送给 Builders (简化版
+// sendToBuilders 通过 Dispatcher 将 bundle 分发给 builder
 func (w *SimulationWorker) sendToBuilders(bundle *types.SendMevBundleArgs, result *types.SimMevBundleResponse) {
-	builders := []string{"flashbots"} // 默认 Builder
-	if bundle.Privacy != nil && len(bundle.Privacy.Builders) > 0 {
-		builders = bundle.Privacy.Builders
+	if w.dispatcher == nil {
+		return
 	}
-
-	for _, builder := range builders {
-		mylog.Logger.Info().
+	ctx := context.Background()
+	if err := w.dispatcher.Dispatch(ctx, bundle); err != nil {
+		mylog.Logger.Error().
+			Err(err).
 			Str("bundleHash", bundle.Metadata.BundleHash.Hex()).
-			Str("builder", builder).
-			Msg("Sending bundle to builder (simulated)")
+			Msg("Dispatcher failed to send bundle")
 	}
 }
