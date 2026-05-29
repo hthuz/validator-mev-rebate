@@ -1,7 +1,6 @@
 package auction
 
 import (
-	"math"
 	"sort"
 
 	"rediswap/internal/pool"
@@ -137,8 +136,130 @@ func CollectRebalancingBids(p *pool.Pool, beliefs map[string]decimal.Decimal) []
 	return bids
 }
 
-// Sqrt helper (re-export from pool package)
-func Sqrt(d decimal.Decimal) decimal.Decimal {
-	f, _ := d.Float64()
-	return decimal.NewFromFloat(math.Sqrt(f))
+// BuildBundle constructs a concrete sandwich bundle for the winning arbitrager.
+//
+// Sandwich structure:
+//  1. Front-run: arb moves pool price to the user's limit price boundary
+//     (maximizes MEV extraction without violating user's min-output constraint)
+//  2. User tx: executed at the (now worse) pool price, still satisfying their limit
+//  3. Back-run: arb moves pool back to external market price (no-arbitrage state)
+//
+// Pool simulation is done on a copy; the real pool state is not modified here.
+func BuildBundle(p *pool.Pool, tx *types.SwapTransaction, winnerID string, belief decimal.Decimal, payment decimal.Decimal) types.Bundle {
+	sim := p.Copy()
+
+	bundle := types.Bundle{
+		TxID:    tx.ID,
+		ArbID:   winnerID,
+		Payment: payment,
+	}
+
+	// --- Front-run ---
+	// The arb pushes the pool to the user's limit price so the user gets exactly
+	// their minimum output (worst acceptable execution). This extracts maximum MEV.
+	//
+	// User limit price (Y/X):
+	//   X→Y: user pays Input X, wants at least Output Y → limit price = Output/Input
+	//   Y→X: user pays Input Y, wants at least Output X → limit price = Input/Output
+	var limitPrice decimal.Decimal
+	if tx.Direction == types.DirectionXToY {
+		// limit price = min Y per X = Output / Input
+		limitPrice = tx.Output.Div(tx.Input)
+	} else {
+		// limit price = max Y per X the user is willing to give = Input / Output
+		limitPrice = tx.Input.Div(tx.Output)
+	}
+
+	frontDir, frontAmountIn := sim.AmountToReachPrice(limitPrice)
+	if frontAmountIn.GreaterThan(decimal.Zero) {
+		var frontAmountOut decimal.Decimal
+		if frontDir == "X->Y" {
+			frontAmountOut = sim.SwapXForY(frontAmountIn)
+			bundle.FrontRun = &types.SwapOp{
+				Direction: types.DirectionXToY,
+				AmountIn:  frontAmountIn,
+				AmountOut: frontAmountOut,
+			}
+		} else if frontDir == "Y->X" {
+			frontAmountOut = sim.SwapYForX(frontAmountIn)
+			bundle.FrontRun = &types.SwapOp{
+				Direction: types.DirectionYToX,
+				AmountIn:  frontAmountIn,
+				AmountOut: frontAmountOut,
+			}
+		}
+	}
+
+	// --- User tx ---
+	var userAmountOut decimal.Decimal
+	if tx.Direction == types.DirectionXToY {
+		userAmountOut = sim.SwapXForY(tx.Input)
+		bundle.UserTx = types.SwapOp{
+			Direction: types.DirectionXToY,
+			AmountIn:  tx.Input,
+			AmountOut: userAmountOut,
+		}
+	} else {
+		userAmountOut = sim.SwapYForX(tx.Input)
+		bundle.UserTx = types.SwapOp{
+			Direction: types.DirectionYToX,
+			AmountIn:  tx.Input,
+			AmountOut: userAmountOut,
+		}
+	}
+
+	// --- Back-run ---
+	// Arb pushes pool back to external market price (no-arbitrage state).
+	backDir, backAmountIn := sim.AmountToReachPrice(belief)
+	if backAmountIn.GreaterThan(decimal.Zero) {
+		var backAmountOut decimal.Decimal
+		if backDir == "X->Y" {
+			backAmountOut = sim.SwapXForY(backAmountIn)
+			bundle.BackRun = &types.SwapOp{
+				Direction: types.DirectionXToY,
+				AmountIn:  backAmountIn,
+				AmountOut: backAmountOut,
+			}
+		} else if backDir == "Y->X" {
+			backAmountOut = sim.SwapYForX(backAmountIn)
+			bundle.BackRun = &types.SwapOp{
+				Direction: types.DirectionYToX,
+				AmountIn:  backAmountIn,
+				AmountOut: backAmountOut,
+			}
+		}
+	}
+
+	// --- Arb profit calculation ---
+	// Profit = value of tokens received - value of tokens spent (denominated in Y)
+	// Front-run: arb spends frontAmountIn, receives frontAmountOut
+	// Back-run:  arb spends backAmountIn, receives backAmountOut
+	// All values converted to Y using belief (1X = belief Y)
+	profit := decimal.Zero
+
+	if bundle.FrontRun != nil {
+		fr := bundle.FrontRun
+		if fr.Direction == types.DirectionXToY {
+			// spent X, received Y: profit += amountOut - amountIn*belief
+			profit = profit.Add(fr.AmountOut.Sub(fr.AmountIn.Mul(belief)))
+		} else {
+			// spent Y, received X: profit += amountOut*belief - amountIn
+			profit = profit.Add(fr.AmountOut.Mul(belief).Sub(fr.AmountIn))
+		}
+	}
+
+	if bundle.BackRun != nil {
+		br := bundle.BackRun
+		if br.Direction == types.DirectionXToY {
+			profit = profit.Add(br.AmountOut.Sub(br.AmountIn.Mul(belief)))
+		} else {
+			profit = profit.Add(br.AmountOut.Mul(belief).Sub(br.AmountIn))
+		}
+	}
+
+	bundle.ArbProfit = profit
+	bundle.NetProfit = profit.Sub(payment)
+
+	return bundle
 }
+

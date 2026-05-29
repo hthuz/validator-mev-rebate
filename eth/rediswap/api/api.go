@@ -180,12 +180,8 @@ func (api *RediSwapAPI) ProcessBlock(params []interface{}) (interface{}, error) 
 
 		// Generate bundle if there's a winner
 		if winner != "" {
-			bundle := types.Bundle{
-				TxID:     tx.ID,
-				FrontRun: winner + "_front_" + tx.ID,
-				UserTx:   tx.ID,
-				BackRun:  winner + "_back_" + tx.ID,
-			}
+			winnerBelief := beliefs[winner]
+			bundle := auction.BuildBundle(api.pool, tx, winner, winnerBelief, payment)
 			result.Bundles = append(result.Bundles, bundle)
 		}
 

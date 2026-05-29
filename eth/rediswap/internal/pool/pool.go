@@ -72,3 +72,36 @@ func Sqrt(d decimal.Decimal) decimal.Decimal {
 	f, _ := d.Float64()
 	return decimal.NewFromFloat(math.Sqrt(f))
 }
+
+// AmountToReachPrice computes the input amount needed to move the pool
+// to the target spot price (Y/X = targetPrice).
+// Returns (direction, amountIn). If pool is already at target, amountIn = 0.
+func (p *Pool) AmountToReachPrice(targetPrice decimal.Decimal) (string, decimal.Decimal) {
+	currentPrice := p.SpotPrice() // Y/X
+
+	if currentPrice.Equal(targetPrice) {
+		return "", decimal.Zero
+	}
+
+	k := p.K()
+
+	if currentPrice.LessThan(targetPrice) {
+		// Price too low (Y/X < target) → need to increase Y/X → swap Y in for X out
+		// At target: newY = sqrt(k * targetPrice), deltaY = newY - currentY
+		newY := Sqrt(k.Mul(targetPrice))
+		deltaY := newY.Sub(p.ReserveY)
+		if deltaY.LessThanOrEqual(decimal.Zero) {
+			return "", decimal.Zero
+		}
+		return "Y->X", deltaY
+	}
+
+	// Price too high (Y/X > target) → need to decrease Y/X → swap X in for Y out
+	// At target: newX = sqrt(k / targetPrice), deltaX = newX - currentX
+	newX := Sqrt(k.Div(targetPrice))
+	deltaX := newX.Sub(p.ReserveX)
+	if deltaX.LessThanOrEqual(decimal.Zero) {
+		return "", decimal.Zero
+	}
+	return "X->Y", deltaX
+}

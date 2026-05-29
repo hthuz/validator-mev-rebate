@@ -31,12 +31,23 @@ type AuctionResult struct {
 	Payment decimal.Decimal `json:"payment"`
 }
 
-// Bundle represents a sandwich bundle
+// SwapOp represents a single swap operation in a bundle
+type SwapOp struct {
+	Direction Direction       `json:"direction"`
+	AmountIn  decimal.Decimal `json:"amount_in"`
+	AmountOut decimal.Decimal `json:"amount_out"` // actual output from pool simulation
+}
+
+// Bundle represents a sandwich bundle with concrete swap operations
 type Bundle struct {
-	TxID     string `json:"tx_id"`
-	FrontRun string `json:"front_run"`
-	UserTx   string `json:"user_tx"`
-	BackRun  string `json:"back_run"`
+	TxID        string          `json:"tx_id"`
+	ArbID       string          `json:"arb_id"`
+	FrontRun    *SwapOp         `json:"front_run,omitempty"` // nil if no front-run needed
+	UserTx      SwapOp          `json:"user_tx"`
+	BackRun     *SwapOp         `json:"back_run,omitempty"` // nil if no back-run needed
+	ArbProfit   decimal.Decimal `json:"arb_profit"`         // gross profit before payment
+	Payment     decimal.Decimal `json:"payment"`            // second-price payment
+	NetProfit   decimal.Decimal `json:"net_profit"`         // arb_profit - payment
 }
 
 // Refund represents a payment refund
