@@ -202,6 +202,13 @@ func (api *RediSwapAPI) ProcessBlock(params []interface{}) (interface{}, error) 
 
 	// Process each transaction
 	for _, tx := range transactions {
+		log.Info().
+			Str("tx_id", tx.ID).
+			Str("direction", string(tx.Direction)).
+			Str("input", tx.Input.String()).
+			Str("output", tx.Output.String()).
+			Msg("Running auction for transaction")
+
 		bids := auction.CollectBids(api.pool, tx, beliefs)
 		winner, payment := auction.RunAuction(bids)
 
@@ -212,11 +219,32 @@ func (api *RediSwapAPI) ProcessBlock(params []interface{}) (interface{}, error) 
 		}
 		result.Auctions = append(result.Auctions, auctionResult)
 
+		log.Info().
+			Str("tx_id", tx.ID).
+			Str("winner", winner).
+			Str("payment", payment.String()).
+			Msg("Auction completed")
+
 		// Generate bundle if there's a winner
 		if winner != "" {
 			winnerBelief := beliefs[winner]
 			bundle := auction.BuildBundle(api.pool, tx, winner, winnerBelief, payment)
 			result.Bundles = append(result.Bundles, bundle)
+
+			opsCount := 1 // UserTx always exists
+			if bundle.FrontRun != nil {
+				opsCount++
+			}
+			if bundle.BackRun != nil {
+				opsCount++
+			}
+
+			log.Info().
+				Str("tx_id", tx.ID).
+				Str("winner", winner).
+				Int("operations", opsCount).
+				Str("net_profit", bundle.NetProfit.String()).
+				Msg("Bundle generated")
 		}
 
 		// Refund payment to user
@@ -226,15 +254,26 @@ func (api *RediSwapAPI) ProcessBlock(params []interface{}) (interface{}, error) 
 				Amount:   payment,
 			}
 			result.Refunds = append(result.Refunds, refund)
+
+			log.Info().
+				Str("user", refund.Receiver).
+				Str("refund", payment.String()).
+				Msg("User refund created")
 		}
 	}
 
 	// Rebalancing auction
+	log.Info().Msg("Running rebalancing auction")
 	rebalancingBids := auction.CollectRebalancingBids(api.pool, beliefs)
 	rebalancingWinner, rebalancingPayment := auction.RunAuction(rebalancingBids)
 
 	result.RebalancingWinner = rebalancingWinner
 	result.RebalancingPayment = rebalancingPayment
+
+	log.Info().
+		Str("winner", rebalancingWinner).
+		Str("payment", rebalancingPayment.String()).
+		Msg("Rebalancing auction completed")
 
 	if rebalancingPayment.GreaterThan(decimal.Zero) {
 		refund := types.Refund{
@@ -242,16 +281,27 @@ func (api *RediSwapAPI) ProcessBlock(params []interface{}) (interface{}, error) 
 			Amount:   rebalancingPayment,
 		}
 		result.Refunds = append(result.Refunds, refund)
+
+		log.Info().
+			Str("refund", rebalancingPayment.String()).
+			Msg("LP refund created")
 	}
 
 	// Clear stores for next block
 	api.txStore.Clear()
 	api.beliefStore.Clear()
 
+	totalRefund := decimal.Zero
+	for _, r := range result.Refunds {
+		totalRefund = totalRefund.Add(r.Amount)
+	}
+
 	log.Info().
 		Int("bundles", len(result.Bundles)).
+		Int("auctions", len(result.Auctions)).
 		Int("refunds", len(result.Refunds)).
-		Msg("Block processed")
+		Str("total_refund", totalRefund.String()).
+		Msg("Block processing complete")
 
 	return result, nil
 }

@@ -18,16 +18,25 @@ func main() {
 	arbID := flag.String("id", "arb1", "Arbitrager ID")
 	belief := flag.Float64("belief", 4.0, "Price belief (1X = belief*Y)")
 	continuous := flag.Bool("continuous", false, "Send beliefs continuously")
+	interval := flag.Int("interval", 5, "Interval between beliefs in seconds (continuous mode)")
 	flag.Parse()
 
 	// Setup logger
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339})
 
 	log.Info().Msg("Starting RediSwap Arbitrager Client...")
+	log.Info().
+		Str("server", *serverURL).
+		Str("arb_id", *arbID).
+		Float64("belief", *belief).
+		Bool("continuous", *continuous).
+		Msg("Configuration")
 
 	if *continuous {
-		sendContinuous(*serverURL, *arbID, *belief)
+		log.Info().Int("interval_seconds", *interval).Msg("Running in continuous mode")
+		sendContinuous(*serverURL, *arbID, *belief, time.Duration(*interval)*time.Second)
 	} else {
+		log.Info().Msg("Running in single-shot mode")
 		sendSingle(*serverURL, *arbID, *belief)
 	}
 }
@@ -38,12 +47,17 @@ func sendSingle(serverURL, arbID string, belief float64) {
 	}
 }
 
-func sendContinuous(serverURL, arbID string, belief float64) {
+func sendContinuous(serverURL, arbID string, belief float64, interval time.Duration) {
+	updateCount := 0
 	for {
+		updateCount++
+		log.Info().Int("update_count", updateCount).Msg("Sending belief update")
 		if err := sendBelief(serverURL, arbID, belief); err != nil {
-			log.Error().Err(err).Msg("Failed to send belief")
+			log.Error().Err(err).Int("update_count", updateCount).Msg("Failed to send belief")
+		} else {
+			log.Info().Int("update_count", updateCount).Msg("Belief registered successfully")
 		}
-		time.Sleep(5 * time.Second)
+		time.Sleep(interval)
 	}
 }
 
@@ -65,11 +79,6 @@ func sendBelief(serverURL, arbID string, belief float64) error {
 		return fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	log.Info().
-		Str("arb_id", arbID).
-		Float64("belief", belief).
-		Msg("Sending belief")
-
 	// Create HTTP client with timeout
 	client := &http.Client{
 		Timeout: 10 * time.Second,
@@ -90,6 +99,11 @@ func sendBelief(serverURL, arbID string, belief float64) error {
 		return fmt.Errorf("RPC error: %v", errObj)
 	}
 
-	log.Info().Interface("result", result["result"]).Msg("Belief registered")
+	if resultData, ok := result["result"].(map[string]interface{}); ok {
+		log.Info().
+			Str("arb_id", resultData["arb_id"].(string)).
+			Str("status", resultData["status"].(string)).
+			Msg("Belief accepted by server")
+	}
 	return nil
 }
