@@ -62,7 +62,10 @@ func sendSwap(serverURL, direction string, input, output float64) error {
 		"id": 1,
 	}
 
-	body, _ := json.Marshal(reqBody)
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return fmt.Errorf("failed to marshal request: %w", err)
+	}
 
 	log.Info().
 		Str("direction", direction).
@@ -70,7 +73,12 @@ func sendSwap(serverURL, direction string, input, output float64) error {
 		Float64("output", output).
 		Msg("Sending swap transaction")
 
-	resp, err := http.Post(serverURL, "application/json", bytes.NewReader(body))
+	// Create HTTP client with timeout
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+
+	resp, err := client.Post(serverURL, "application/json", bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("request failed: %w", err)
 	}

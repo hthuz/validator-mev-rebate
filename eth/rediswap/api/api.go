@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sync"
 	"sync/atomic"
 
 	"rediswap/internal/auction"
@@ -17,10 +18,11 @@ import (
 
 // RediSwapAPI handles RPC methods
 type RediSwapAPI struct {
-	txStore     *store.TransactionStore
-	beliefStore *store.BeliefStore
-	pool        *pool.Pool
-	txCounter   uint64
+	txStore       *store.TransactionStore
+	beliefStore   *store.BeliefStore
+	pool          *pool.Pool
+	txCounter     uint64
+	processingMu  sync.Mutex // Protects ProcessBlock from concurrent execution
 }
 
 // NewRediSwapAPI creates a new API instance
@@ -75,7 +77,10 @@ func (api *RediSwapAPI) SendSwap(params []interface{}) (interface{}, error) {
 		return nil, fmt.Errorf("missing parameters")
 	}
 
-	paramsJSON, _ := json.Marshal(params[0])
+	paramsJSON, err := json.Marshal(params[0])
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal parameters: %v", err)
+	}
 	var args types.SendSwapArgs
 	if err := json.Unmarshal(paramsJSON, &args); err != nil {
 		return nil, fmt.Errorf("invalid parameters: %v", err)
@@ -87,6 +92,14 @@ func (api *RediSwapAPI) SendSwap(params []interface{}) (interface{}, error) {
 		return nil, fmt.Errorf("invalid direction: %s", args.Direction)
 	}
 
+	// Validate amounts
+	if args.Input <= 0 {
+		return nil, fmt.Errorf("input amount must be positive, got: %f", args.Input)
+	}
+	if args.Output <= 0 {
+		return nil, fmt.Errorf("output amount must be positive, got: %f", args.Output)
+	}
+
 	// Create transaction
 	txID := fmt.Sprintf("TX%d", atomic.AddUint64(&api.txCounter, 1))
 	tx := &types.SwapTransaction{
@@ -96,7 +109,9 @@ func (api *RediSwapAPI) SendSwap(params []interface{}) (interface{}, error) {
 		Output:    decimal.NewFromFloat(args.Output),
 	}
 
-	api.txStore.Add(tx)
+	if !api.txStore.Add(tx) {
+		return nil, fmt.Errorf("duplicate transaction ID: %s", txID)
+	}
 
 	log.Info().
 		Str("tx_id", txID).
@@ -118,19 +133,34 @@ func (api *RediSwapAPI) SendBelief(params []interface{}) (interface{}, error) {
 		return nil, fmt.Errorf("missing parameters")
 	}
 
-	paramsJSON, _ := json.Marshal(params[0])
+	paramsJSON, err := json.Marshal(params[0])
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal parameters: %v", err)
+	}
 	var args types.SendBeliefArgs
 	if err := json.Unmarshal(paramsJSON, &args); err != nil {
 		return nil, fmt.Errorf("invalid parameters: %v", err)
 	}
 
-	belief := decimal.NewFromFloat(args.Belief)
-	api.beliefStore.Set(args.ArbID, belief)
+	// Validate belief
+	if args.Belief <= 0 {
+		return nil, fmt.Errorf("belief must be positive, got: %f", args.Belief)
+	}
 
-	log.Info().
-		Str("arb_id", args.ArbID).
-		Float64("belief", args.Belief).
-		Msg("Belief received")
+	belief := decimal.NewFromFloat(args.Belief)
+	existed := api.beliefStore.Set(args.ArbID, belief)
+
+	if existed {
+		log.Warn().
+			Str("arb_id", args.ArbID).
+			Float64("belief", args.Belief).
+			Msg("Belief updated (overwriting previous value)")
+	} else {
+		log.Info().
+			Str("arb_id", args.ArbID).
+			Float64("belief", args.Belief).
+			Msg("Belief received")
+	}
 
 	return map[string]interface{}{
 		"arb_id": args.ArbID,
@@ -141,6 +171,10 @@ func (api *RediSwapAPI) SendBelief(params []interface{}) (interface{}, error) {
 
 // ProcessBlock handles rediswap_processBlock - runs auctions and generates bundles
 func (api *RediSwapAPI) ProcessBlock(params []interface{}) (interface{}, error) {
+	// Prevent concurrent block processing
+	api.processingMu.Lock()
+	defer api.processingMu.Unlock()
+
 	transactions := api.txStore.GetAll()
 	beliefs := api.beliefStore.GetAll()
 
@@ -229,7 +263,9 @@ func writeSuccess(w http.ResponseWriter, id interface{}, result interface{}) {
 		ID:      id,
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		log.Error().Err(err).Msg("Failed to encode JSON response")
+	}
 }
 
 func writeError(w http.ResponseWriter, id interface{}, code int, message string) {
@@ -243,5 +279,7 @@ func writeError(w http.ResponseWriter, id interface{}, code int, message string)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK) // JSON-RPC errors still return 200
-	json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		log.Error().Err(err).Msg("Failed to encode JSON error response")
+	}
 }

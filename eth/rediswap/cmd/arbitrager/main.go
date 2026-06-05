@@ -60,14 +60,22 @@ func sendBelief(serverURL, arbID string, belief float64) error {
 		"id": 1,
 	}
 
-	body, _ := json.Marshal(reqBody)
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return fmt.Errorf("failed to marshal request: %w", err)
+	}
 
 	log.Info().
 		Str("arb_id", arbID).
 		Float64("belief", belief).
 		Msg("Sending belief")
 
-	resp, err := http.Post(serverURL, "application/json", bytes.NewReader(body))
+	// Create HTTP client with timeout
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+
+	resp, err := client.Post(serverURL, "application/json", bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("request failed: %w", err)
 	}

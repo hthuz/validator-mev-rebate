@@ -24,12 +24,18 @@ func NewTransactionStore() *TransactionStore {
 }
 
 // Add adds a transaction to the store
-func (s *TransactionStore) Add(tx *types.SwapTransaction) {
+func (s *TransactionStore) Add(tx *types.SwapTransaction) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// Check for duplicate transaction ID
+	if _, exists := s.transactions[tx.ID]; exists {
+		return false
+	}
+
 	s.transactions[tx.ID] = tx
 	s.txList = append(s.txList, tx)
+	return true
 }
 
 // GetAll returns all transactions
@@ -64,12 +70,14 @@ func NewBeliefStore() *BeliefStore {
 	}
 }
 
-// Set sets an arbitrager's belief
-func (s *BeliefStore) Set(arbID string, belief decimal.Decimal) {
+// Set sets an arbitrager's belief, returns true if updated, false if new
+func (s *BeliefStore) Set(arbID string, belief decimal.Decimal) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	_, existed := s.beliefs[arbID]
 	s.beliefs[arbID] = belief
+	return existed
 }
 
 // GetAll returns all beliefs
