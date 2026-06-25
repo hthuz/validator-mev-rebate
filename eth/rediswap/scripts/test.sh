@@ -27,14 +27,14 @@ run_example_1() {
 
   # Register arbitragers
   echo "Registering arbitragers..."
-  ./bin/arbitrager -server http://localhost:8081 -id arb1 -belief 4.0 2>&1 | grep "Belief registered"
-  ./bin/arbitrager -server http://localhost:8081 -id arb2 -belief 1.0 2>&1 | grep "Belief registered"
+  ./bin/arbitrager -server http://localhost:8081 -id arb1 -belief 4.0 2>&1 | grep "Belief accepted by server"
+  ./bin/arbitrager -server http://localhost:8081 -id arb2 -belief 1.0 2>&1 | grep "Belief accepted by server"
 
   # Send transactions
   echo "Sending transactions..."
-  ./bin/user -server http://localhost:8081 -direction "X->Y" -input 8 -output 25 2>&1 | grep "Swap submitted"
-  ./bin/user -server http://localhost:8081 -direction "X->Y" -input 30 -output 12 2>&1 | grep "Swap submitted"
-  ./bin/user -server http://localhost:8081 -direction "Y->X" -input 20 -output 10 2>&1 | grep "Swap submitted"
+  ./bin/user -server http://localhost:8081 -direction "X->Y" -input 8 -output 25 2>&1 | grep "Swap accepted by server"
+  ./bin/user -server http://localhost:8081 -direction "X->Y" -input 30 -output 12 2>&1 | grep "Swap accepted by server"
+  ./bin/user -server http://localhost:8081 -direction "Y->X" -input 20 -output 10 2>&1 | grep "Swap accepted by server"
 
   # Process block
   echo ""
@@ -71,14 +71,14 @@ run_example_2() {
 
   # Register three arbitragers with competitive beliefs
   echo "Registering arbitragers..."
-  ./bin/arbitrager -server http://localhost:8082 -id arb1 -belief 25.0 2>&1 | grep "Belief registered"
-  ./bin/arbitrager -server http://localhost:8082 -id arb2 -belief 20.0 2>&1 | grep "Belief registered"
-  ./bin/arbitrager -server http://localhost:8082 -id arb3 -belief 15.0 2>&1 | grep "Belief registered"
+  ./bin/arbitrager -server http://localhost:8082 -id arb1 -belief 25.0 2>&1 | grep "Belief accepted by server"
+  ./bin/arbitrager -server http://localhost:8082 -id arb2 -belief 20.0 2>&1 | grep "Belief accepted by server"
+  ./bin/arbitrager -server http://localhost:8082 -id arb3 -belief 15.0 2>&1 | grep "Belief accepted by server"
 
   # Send transactions
   echo "Sending transactions..."
-  ./bin/user -server http://localhost:8082 -direction "X->Y" -input 5 -output 80 2>&1 | grep "Swap submitted"
-  ./bin/user -server http://localhost:8082 -direction "Y->X" -input 50 -output 2 2>&1 | grep "Swap submitted"
+  ./bin/user -server http://localhost:8082 -direction "X->Y" -input 5 -output 80 2>&1 | grep "Swap accepted by server"
+  ./bin/user -server http://localhost:8082 -direction "Y->X" -input 50 -output 2 2>&1 | grep "Swap accepted by server"
 
   # Process block
   echo ""
@@ -115,14 +115,14 @@ run_example_3() {
 
   # Register arbitragers
   echo "Registering arbitragers..."
-  ./bin/arbitrager -server http://localhost:8083 -id arb1 -belief 22.0 2>&1 | grep "Belief registered"
-  ./bin/arbitrager -server http://localhost:8083 -id arb2 -belief 18.0 2>&1 | grep "Belief registered"
+  ./bin/arbitrager -server http://localhost:8083 -id arb1 -belief 22.0 2>&1 | grep "Belief accepted by server"
+  ./bin/arbitrager -server http://localhost:8083 -id arb2 -belief 18.0 2>&1 | grep "Belief accepted by server"
 
   # Send transactions - mostly Y->X
   echo "Sending transactions..."
-  ./bin/user -server http://localhost:8083 -direction "Y->X" -input 200 -output 8 2>&1 | grep "Swap submitted"
-  ./bin/user -server http://localhost:8083 -direction "Y->X" -input 150 -output 5 2>&1 | grep "Swap submitted"
-  ./bin/user -server http://localhost:8083 -direction "X->Y" -input 10 -output 150 2>&1 | grep "Swap submitted"
+  ./bin/user -server http://localhost:8083 -direction "Y->X" -input 200 -output 8 2>&1 | grep "Swap accepted by server"
+  ./bin/user -server http://localhost:8083 -direction "Y->X" -input 150 -output 5 2>&1 | grep "Swap accepted by server"
+  ./bin/user -server http://localhost:8083 -direction "X->Y" -input 10 -output 150 2>&1 | grep "Swap accepted by server"
 
   # Process block
   echo ""
