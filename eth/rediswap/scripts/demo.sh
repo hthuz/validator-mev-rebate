@@ -5,6 +5,10 @@
 
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REDISWAP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$REDISWAP_DIR"
+
 echo "========================================"
 echo "RediSwap Complete Demo"
 echo "========================================"
@@ -14,6 +18,7 @@ echo ""
 echo "Building binaries..."
 go mod tidy
 mkdir -p bin
+mkdir -p logs
 go build -o bin/server ./cmd/server
 go build -o bin/user ./cmd/user
 go build -o bin/arbitrager ./cmd/arbitrager

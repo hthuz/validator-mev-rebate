@@ -2,6 +2,12 @@
 
 # Final verification script to ensure all components work
 
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REDISWAP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$REDISWAP_DIR"
+
 echo "=========================================="
 echo "RediSwap System Verification"
 echo "=========================================="
@@ -22,11 +28,11 @@ echo ""
 
 # Check scripts are executable
 echo "2. Checking scripts..."
-if [ -x "demo.sh" ] && [ -x "quick_test.sh" ] && [ -x "test.sh" ]; then
+if [ -x "$SCRIPT_DIR/demo.sh" ] && [ -x "$SCRIPT_DIR/quick_test.sh" ] && [ -x "$SCRIPT_DIR/test.sh" ]; then
     echo "✓ All scripts are executable"
 else
     echo "✗ Some scripts not executable, fixing..."
-    chmod +x demo.sh quick_test.sh test.sh
+    chmod +x "$SCRIPT_DIR/demo.sh" "$SCRIPT_DIR/quick_test.sh" "$SCRIPT_DIR/test.sh"
     echo "✓ Permissions fixed"
 fi
 echo ""
@@ -75,9 +81,9 @@ echo "System Status: READY"
 echo "=========================================="
 echo ""
 echo "Available commands:"
-echo "  ./demo.sh          - Run complete demo system"
-echo "  ./quick_test.sh    - Quick 15-second test"
-echo "  ./test.sh          - Original paper Example 1"
+echo "  ./scripts/demo.sh          - Run complete demo system"
+echo "  ./scripts/quick_test.sh    - Quick 15-second test"
+echo "  ./scripts/test.sh          - Original paper Example 1"
 echo ""
 echo "Manual execution:"
 echo "  ./bin/server -auto-process -process-interval 10"

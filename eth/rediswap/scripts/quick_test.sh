@@ -2,6 +2,12 @@
 
 # Quick test of the new auto-processing demo system
 
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REDISWAP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$REDISWAP_DIR"
+
 echo "Starting quick test of RediSwap demo system..."
 echo ""
 

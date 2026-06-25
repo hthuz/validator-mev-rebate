@@ -13,13 +13,13 @@ go build -o bin/user ./cmd/user
 go build -o bin/arbitrager ./cmd/arbitrager
 
 # Run complete demo (NEW - recommended!)
-./demo.sh
+./scripts/demo.sh
 
 # Run quick test
-./quick_test.sh
+./scripts/quick_test.sh
 
 # Run the automated test (reproduces paper Example 1)
-./test.sh
+./scripts/test.sh
 
 # Run server with auto-processing (NEW!)
 ./bin/server -port 8080 -pool-x 4 -pool-y 100 -auto-process -process-interval 10
@@ -103,7 +103,7 @@ Trigger → rediswap_processBlock → Auction Engine → Bundle Generation → R
 
 ## Expected Results
 
-Running `./test.sh` should reproduce paper Example 1:
+Running `./scripts/test.sh` should reproduce paper Example 1:
 - Pool: (4, 100), k=400
 - TX1 (X→Y, 8→25): winner=arb1, payment=0
 - TX2 (X→Y, 30→12): winner=arb1, payment=18 → refund to user
@@ -117,7 +117,7 @@ RediSwap now includes a complete demo system similar to rebate, with multiple en
 ### Quick Start
 ```bash
 # Run the complete demo with all components
-./demo.sh
+./scripts/demo.sh
 ```
 
 This starts:
