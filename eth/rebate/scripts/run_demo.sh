@@ -73,7 +73,7 @@ start_one() {
   : > "${log_file}"
   (
     cd "${ROOT_DIR}"
-    "$@" >>"${log_file}" 2>&1
+    exec env NO_COLOR=1 "$@" >>"${log_file}" 2>&1
   ) &
   local pid=$!
   echo "${pid}" > "${pid_file}"
@@ -122,6 +122,27 @@ status_one() {
   echo "${name}: stopped log=${log_file}"
 }
 
+build_binaries() {
+  (
+    cd "${ROOT_DIR}"
+    go build -o ./server ./cmd/server
+    go build -o ./searcher ./cmd/searcher
+    go build -o ./user ./cmd/user
+  )
+}
+
+cleanup_orphans() {
+  pkill -f '/Users/bytedance/validator-mev-rebate/eth/rebate/server' 2>/dev/null || true
+  pkill -f '/Users/bytedance/validator-mev-rebate/eth/rebate/searcher' 2>/dev/null || true
+  pkill -f '/Users/bytedance/validator-mev-rebate/eth/rebate/user' 2>/dev/null || true
+  pkill -f '/var/folders/.*/go-build.*/exe/server' 2>/dev/null || true
+  pkill -f '/var/folders/.*/go-build.*/exe/searcher' 2>/dev/null || true
+  pkill -f '/var/folders/.*/go-build.*/exe/user' 2>/dev/null || true
+  pkill -f 'go run ./cmd/server' 2>/dev/null || true
+  pkill -f 'go run ./cmd/searcher' 2>/dev/null || true
+  pkill -f 'go run ./cmd/user' 2>/dev/null || true
+}
+
 start_all() {
   echo "starting demo with:"
   echo "  SERVER_URL=${SERVER_URL}"
@@ -131,13 +152,15 @@ start_all() {
   echo "  SEARCHER_MAX_CHAIN_DEPTH=${SEARCHER_MAX_CHAIN_DEPTH}"
   echo
 
+  build_binaries
+
   start_one "server" "${SERVER_PID_FILE}" "${SERVER_LOG}" \
-    go run ./cmd/server
+    "${ROOT_DIR}/server"
 
   sleep 2
 
   start_one "searcher" "${SEARCHER_PID_FILE}" "${SEARCHER_LOG}" \
-    go run ./cmd/searcher \
+    "${ROOT_DIR}/searcher" \
       -server "${SERVER_URL}" \
       -events "${EVENTS_URL}" \
       -dataset "${DATASET_PATH}" \
@@ -146,7 +169,7 @@ start_all() {
   sleep 1
 
   start_one "user" "${USER_PID_FILE}" "${USER_LOG}" \
-    go run ./cmd/user \
+    "${ROOT_DIR}/user" \
       -server "${SERVER_URL}" \
       -dataset "${DATASET_PATH}" \
       -interval "${USER_INTERVAL}"
@@ -167,6 +190,7 @@ stop_all() {
   stop_one "user" "${USER_PID_FILE}"
   stop_one "searcher" "${SEARCHER_PID_FILE}"
   stop_one "server" "${SERVER_PID_FILE}"
+  cleanup_orphans
 }
 
 status_all() {
