@@ -10,6 +10,7 @@ import (
 	"rebate/api"
 	"rebate/config"
 	"rebate/internal/builder"
+	"rebate/internal/dataset"
 	"rebate/internal/metrics"
 	"rebate/internal/queue"
 	"rebate/internal/sim"
@@ -47,7 +48,10 @@ func main() {
 	// 3. 创建组件
 	store := sim.NewBundleStore()
 	simQueue := queue.NewSimulationQueue()
-	simulator := sim.NewMockSimulator()
+	simulator, err := buildSimulator(cfg)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("Failed to build simulator")
+	}
 	hintBroadcaster := sse.NewHub()
 	metricsStore := metrics.NewMetricsStore()
 
@@ -119,7 +123,7 @@ func main() {
 	defer cancel()
 
 	worker.Start(ctx)
-	go blockUpdater(ctx, simulator, simQueue, metricsStore)
+	go blockUpdater(ctx, simulator, simQueue, metricsStore, cfg.Simulator.BlockIntervalSeconds)
 
 	go func() {
 		logger.Info().Str("addr", server.Addr).Msg("HTTP server listening")
@@ -171,9 +175,41 @@ func main() {
 	logger.Info().Msg("Validator MEV Rebate Node stopped")
 }
 
-// blockUpdater 模拟区块增长
-func blockUpdater(ctx context.Context, sim *sim.MockSimulator, queue *queue.SimulationQueue, metrics *metrics.MetricsStore) {
-	ticker := time.NewTicker(12 * time.Second)
+func buildSimulator(cfg *config.Config) (sim.SimulationBackend, error) {
+	switch cfg.Simulator.Mode {
+	case "mock":
+		return sim.NewMockSimulator(), nil
+	case "replay":
+		data, err := dataset.LoadCSV(cfg.Simulator.DatasetPath)
+		if err != nil {
+			return nil, err
+		}
+		replaySim, err := sim.NewReplaySimulator(data, cfg.Simulator.BlockGasLimit)
+		if err != nil {
+			return nil, err
+		}
+		logger.Info().
+			Str("mode", cfg.Simulator.Mode).
+			Str("datasetPath", cfg.Simulator.DatasetPath).
+			Int("blocks", len(data.Blocks())).
+			Int("transactions", len(data.Transactions())).
+			Msg("Replay simulator initialized")
+		return replaySim, nil
+	default:
+		return nil, fmt.Errorf("unsupported simulator mode %q", cfg.Simulator.Mode)
+	}
+}
+
+// blockUpdater 推进当前区块
+func blockUpdater(ctx context.Context, backend sim.SimulationBackend, queue *queue.SimulationQueue, metrics *metrics.MetricsStore, intervalSeconds int) {
+	advancer, ok := backend.(sim.BlockAdvancer)
+	if !ok {
+		logger.Warn().Msg("Simulator does not support block advancement")
+		return
+	}
+
+	tickDuration := time.Duration(intervalSeconds) * time.Second
+	ticker := time.NewTicker(tickDuration)
 	defer ticker.Stop()
 
 	validators := []string{
@@ -183,27 +219,42 @@ func blockUpdater(ctx context.Context, sim *sim.MockSimulator, queue *queue.Simu
 	}
 	validatorIndex := 0
 
+	advance := func() bool {
+		prevBlock := advancer.CurrentBlock()
+		if metrics != nil && prevBlock > 0 {
+			metrics.FinalizeBlock(prevBlock, advancer.BlockGasLimit())
+		}
+
+		newBlock, ok := advancer.AdvanceBlock()
+		if !ok {
+			logger.Warn().Msg("No more replay blocks available")
+			return false
+		}
+
+		queue.UpdateBlock(newBlock)
+
+		if metrics != nil {
+			validator := common.HexToAddress(validators[validatorIndex%len(validators)])
+			metrics.StartNewBlock(newBlock, validator)
+			validatorIndex++
+		}
+
+		logger.Info().Uint64("block", newBlock).Msg("New block")
+		return true
+	}
+
+	if !advance() {
+		return
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			prevBlock := sim.GetBlock()
-			if metrics != nil && prevBlock > 1000000 {
-				metrics.FinalizeBlock(prevBlock, 30000000)
+			if !advance() {
+				return
 			}
-
-			newBlock := prevBlock + 1
-			sim.SetBlock(newBlock)
-			queue.UpdateBlock(newBlock)
-
-			if metrics != nil {
-				validator := common.HexToAddress(validators[validatorIndex%len(validators)])
-				metrics.StartNewBlock(newBlock, validator)
-				validatorIndex++
-			}
-
-			logger.Info().Uint64("block", newBlock).Msg("New block")
 		}
 	}
 }
@@ -219,6 +270,7 @@ func printUsage(port string) {
 	logger.Info().Msg("  - mev_sendBundle         : Submit a bundle")
 	logger.Info().Msg("  - mev_simBundle          : Simulate a bundle")
 	logger.Info().Msg("  - eth_cancelBundleByHash : Cancel a bundle")
+	logger.Info().Msg("  - eth_blockNumber        : Get current replay block")
 	logger.Info().Msg("")
 	logger.Info().Msg("Metrics Endpoints:")
 	logger.Info().Msg("  GET /events                         : SSE hint stream")

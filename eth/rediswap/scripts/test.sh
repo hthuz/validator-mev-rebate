@@ -148,16 +148,12 @@ echo "######################################################"
 echo ""
 
 run_example_1
-echo ""
-echo ""
+# echo ""
+# echo ""
 
-run_example_2
-echo ""
-echo ""
+# run_example_2
+# echo ""
+# echo ""
 
-run_example_3
+# run_example_3
 
-echo ""
-echo "######################################################"
-echo "All tests complete!"
-echo "######################################################"

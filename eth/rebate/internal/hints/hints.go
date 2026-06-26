@@ -5,11 +5,10 @@ import (
 
 	"rebate/mylog"
 	"rebate/pkg/types"
+	"rebate/pkg/utils"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
-	etypes "github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/rlp"
 )
 
 // ============== Hint 提取常量 ==============
@@ -73,12 +72,17 @@ func extractTxHints(body []types.MevBundleBody, hints types.HintIntent) []types.
 	var txHints []types.TxHint
 
 	for _, elem := range body {
+		if elem.Bundle != nil {
+			txHints = append(txHints, extractTxHints(elem.Bundle.Body, hints)...)
+			continue
+		}
+
 		if elem.Tx == nil {
 			continue
 		}
 
-		var tx etypes.Transaction
-		if err := rlp.DecodeBytes(*elem.Tx, &tx); err != nil {
+		tx, err := utils.DecodeTransaction(*elem.Tx)
+		if err != nil {
 			continue
 		}
 

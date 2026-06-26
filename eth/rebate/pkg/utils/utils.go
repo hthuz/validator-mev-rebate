@@ -3,13 +3,13 @@ package utils
 import (
 	"crypto/ecdsa"
 	"encoding/json"
+	"fmt"
 
 	"rebate/pkg/types"
 
 	"github.com/ethereum/go-ethereum/common"
 	etypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/ethereum/go-ethereum/rlp"
 	"golang.org/x/crypto/sha3"
 )
 
@@ -42,18 +42,26 @@ func CalculateMatchingHash(bundleHash common.Hash, signer *ecdsa.PrivateKey) com
 
 // GetTransactionSender 获取交易签名者地址
 func GetTransactionSender(txBytes []byte) (common.Address, error) {
-	var tx etypes.Transaction
-	if err := rlp.DecodeBytes(txBytes, &tx); err != nil {
+	tx, err := DecodeTransaction(txBytes)
+	if err != nil {
 		return common.Address{}, err
 	}
 
 	signer := etypes.LatestSignerForChainID(tx.ChainId())
-	sender, err := etypes.Sender(signer, &tx)
+	sender, err := etypes.Sender(signer, tx)
 	if err != nil {
 		return common.Address{}, err
 	}
 
 	return sender, nil
+}
+
+func DecodeTransaction(txBytes []byte) (*etypes.Transaction, error) {
+	var tx etypes.Transaction
+	if err := tx.UnmarshalBinary(txBytes); err != nil {
+		return nil, fmt.Errorf("decode transaction: %w", err)
+	}
+	return &tx, nil
 }
 
 // ============== 序列化辅助 ==============

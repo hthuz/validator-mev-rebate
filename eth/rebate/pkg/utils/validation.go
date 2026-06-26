@@ -8,8 +8,6 @@ import (
 	"rebate/pkg/types"
 
 	"github.com/ethereum/go-ethereum/common"
-	etypes "github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/rlp"
 )
 
 // ============== 验证常量 ==============
@@ -148,8 +146,8 @@ func validateBody(body []types.MevBundleBody, currentBlock uint64, signer *ecdsa
 
 		if elem.Tx != nil {
 			// 解析并验证交易
-			var tx etypes.Transaction
-			if err := rlp.DecodeBytes(*elem.Tx, &tx); err != nil {
+			tx, err := DecodeTransaction(*elem.Tx)
+			if err != nil {
 				return common.Hash{}, nil, false, fmt.Errorf("%w: %v", ErrInvalidTransaction, err)
 			}
 			elemHash = tx.Hash()

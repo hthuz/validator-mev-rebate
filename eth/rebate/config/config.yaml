@@ -1,6 +1,12 @@
 server:
   port: 8080
 
+simulator:
+  mode: replay
+  dataset_path: data/ethereum_transactions.csv
+  block_interval_seconds: 2
+  block_gas_limit: 30000000
+
 # 注册到分发器的 builder 节点
 # score 越高，获得的 bundle 比例越大（加权随机）
 dispatcher:

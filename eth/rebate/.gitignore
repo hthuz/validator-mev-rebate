@@ -1,3 +1,6 @@
 server
 searcher
 user
+txcollector
+logs/
+run/

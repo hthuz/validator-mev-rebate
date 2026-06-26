@@ -7,7 +7,6 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	etypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/ethereum/go-ethereum/rlp"
 )
 
 func CreateTestTx() (hexutil.Bytes, error) {
@@ -36,7 +35,7 @@ func CreateTestTx() (hexutil.Bytes, error) {
 	}
 
 	// RLP 编码
-	data, err := rlp.EncodeToBytes(signedTx)
+	data, err := signedTx.MarshalBinary()
 	if err != nil {
 		return nil, err
 	}

@@ -34,12 +34,22 @@ func NewJSONRPCHandler(api *MevShareAPI) http.Handler {
 			result, rpcErr = handleSimBundle(ctx, api, req.Params)
 		case CancelBundleByHash:
 			result, rpcErr = handleCancelBundle(ctx, api, req.Params)
+		case BlockNumberMethod:
+			result, rpcErr = handleBlockNumber(ctx, api)
 		default:
 			rpcErr = &types.JSONRPCError{Code: -32601, Message: "Method not found"}
 		}
 
 		writeJSONRPCResponse(w, req.ID, result, rpcErr)
 	})
+}
+
+func handleBlockNumber(ctx context.Context, api *MevShareAPI) (interface{}, *types.JSONRPCError) {
+	result, err := api.BlockNumber(ctx)
+	if err != nil {
+		return nil, &types.JSONRPCError{Code: -32000, Message: err.Error()}
+	}
+	return result, nil
 }
 
 func handleSendBundle(ctx context.Context, api *MevShareAPI, params json.RawMessage) (interface{}, *types.JSONRPCError) {

@@ -26,6 +26,7 @@ const (
 	SendBundleMethod   = "mev_sendBundle"
 	SimBundleMethod    = "mev_simBundle"
 	CancelBundleByHash = "eth_cancelBundleByHash"
+	BlockNumberMethod  = "eth_blockNumber"
 )
 
 // ============== API 错误 ==============
@@ -214,10 +215,15 @@ func (api *MevShareAPI) CancelBundleByHash(ctx context.Context, hash common.Hash
 	}, nil
 }
 
+func (api *MevShareAPI) BlockNumber(ctx context.Context) (hexutil.Uint64, error) {
+	_ = ctx
+	return hexutil.Uint64(api.getCurrentBlock()), nil
+}
+
 // getCurrentBlock 获取当前块号
 func (api *MevShareAPI) getCurrentBlock() uint64 {
-	if sim, ok := api.simulator.(*sim.MockSimulator); ok {
-		return sim.GetBlock()
+	if provider, ok := api.simulator.(sim.BlockProvider); ok {
+		return provider.CurrentBlock()
 	}
 	return 1000000 // 默认值
 }

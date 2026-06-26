@@ -1,69 +1,80 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
+	"flag"
 	"net/http"
+	"rebate/api"
+	"rebate/internal/client"
 	"rebate/mylog"
 	"rebate/pkg/types"
-	"rebate/pkg/utils"
 	"time"
-
-	"github.com/ethereum/go-ethereum/common/hexutil"
 )
 
 var logger = mylog.Logger
 
 func main() {
-	SendMultipleTx()
+	serverURL := flag.String("server", "http://localhost:8080", "rebate server url")
+	datasetPath := flag.String("dataset", "data/ethereum_transactions.csv", "path to collected Ethereum transaction dataset")
+	interval := flag.Duration("interval", 2*time.Second, "bundle send interval")
+	flag.Parse()
 
-}
-func SendMultipleTx() {
-	for {
-		SendSingleTx()
-		time.Sleep(2 * time.Second)
-	}
-
+	SendMultipleTx(*serverURL, *datasetPath, *interval)
 }
 
-func SendSingleTx() {
-
-	// 构造请求
-	tx, err := utils.CreateTestTx()
-	reqBody := map[string]interface{}{
-		"jsonrpc": "2.0",
-		"method":  "mev_sendBundle",
-		"params": []map[string]interface{}{
-			{
-				"version": "v0.1",
-				"inclusion": map[string]string{
-					"block":    "0xF4240",
-					"maxBlock": "0xF424A",
-				},
-				"body": []map[string]interface{}{
-					{"tx": hexutil.Encode(tx)},
-				},
-				"privacy": map[string]interface{}{
-					"hints": 84, // HintHash(16) | HintTxHash(64) | HintLogs(4)
-				},
-			},
-		},
-		"id": 1,
-	}
-
-	body, _ := json.Marshal(reqBody)
-	logger.Info().Msg("sending req")
-	resp, err := http.Post("http://localhost:8080", "application/json", bytes.NewReader(body))
+func SendMultipleTx(serverURL, datasetPath string, interval time.Duration) {
+	builder, err := client.NewReplayBundleBuilder(datasetPath)
 	if err != nil {
-		logger.Err(err).Msg("err")
+		logger.Fatal().Err(err).Str("dataset", datasetPath).Msg("failed to load replay dataset")
+	}
+
+	for {
+		SendSingleTx(serverURL, builder)
+		time.Sleep(interval)
+	}
+}
+
+func SendSingleTx(serverURL string, builder *client.ReplayBundleBuilder) {
+	currentBlock, err := client.GetCurrentBlock(serverURL)
+	if err != nil {
+		logger.Error().Err(err).Msg("failed to fetch current block")
+		return
+	}
+
+	bundle, err := builder.BuildBundle(currentBlock)
+	if err != nil {
+		logger.Error().Err(err).Msg("failed to build replay bundle")
+		return
+	}
+
+	body, err := client.BuildHTTPBody(api.SendBundleMethod, bundle, 1)
+	if err != nil {
+		logger.Error().Err(err).Msg("failed to build json-rpc request")
+		return
+	}
+
+	logger.Info().
+		Uint64("currentBlock", currentBlock).
+		Uint64("targetBlock", uint64(bundle.Inclusion.BlockNumber)).
+		Int("bodyLen", len(bundle.Body)).
+		Msg("sending replay bundle")
+
+	resp, err := http.Post(serverURL, "application/json", body)
+	if err != nil {
+		logger.Err(err).Msg("request failed")
+		return
 	}
 	defer resp.Body.Close()
 
 	var result types.JSONRPCResponse
-	json.NewDecoder(resp.Body).Decode(&result)
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		logger.Error().Err(err).Msg("failed to decode response")
+		return
+	}
 
 	if result.Error != nil {
-		logger.Fatal().Any("err", result.Error).Msg("rpc error")
+		logger.Error().Any("err", result.Error).Msg("rpc error")
+		return
 	}
 
 	logger.Info().Any("RPC response", result.Result).Msg("received resp")

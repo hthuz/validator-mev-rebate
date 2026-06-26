@@ -23,6 +23,14 @@ type DispatcherConfig struct {
 	Builders []BuilderConfig `mapstructure:"builders"`
 }
 
+// SimulatorConfig 模拟器配置
+type SimulatorConfig struct {
+	Mode                 string `mapstructure:"mode"`
+	DatasetPath          string `mapstructure:"dataset_path"`
+	BlockIntervalSeconds int    `mapstructure:"block_interval_seconds"`
+	BlockGasLimit        uint64 `mapstructure:"block_gas_limit"`
+}
+
 // MockBuilderConfig mock builder 监听配置
 type MockBuilderConfig struct {
 	Name string `mapstructure:"name"`
@@ -31,8 +39,9 @@ type MockBuilderConfig struct {
 
 // Config 全局配置
 type Config struct {
-	Server      ServerConfig      `mapstructure:"server"`
-	Dispatcher  DispatcherConfig  `mapstructure:"dispatcher"`
+	Server       ServerConfig        `mapstructure:"server"`
+	Simulator    SimulatorConfig     `mapstructure:"simulator"`
+	Dispatcher   DispatcherConfig    `mapstructure:"dispatcher"`
 	MockBuilders []MockBuilderConfig `mapstructure:"mock_builders"`
 }
 
@@ -73,11 +82,27 @@ func Load(path string) (*Config, error) {
 
 func setDefaults(v *viper.Viper) {
 	v.SetDefault("server.port", 8080)
+	v.SetDefault("simulator.mode", "replay")
+	v.SetDefault("simulator.dataset_path", "data/ethereum_transactions.csv")
+	v.SetDefault("simulator.block_interval_seconds", 2)
+	v.SetDefault("simulator.block_gas_limit", 30000000)
 }
 
 func validate(cfg *Config) error {
 	if cfg.Server.Port <= 0 || cfg.Server.Port > 65535 {
 		return fmt.Errorf("server.port %d is out of range", cfg.Server.Port)
+	}
+	if cfg.Simulator.Mode != "mock" && cfg.Simulator.Mode != "replay" {
+		return fmt.Errorf("simulator.mode %q is invalid", cfg.Simulator.Mode)
+	}
+	if cfg.Simulator.BlockIntervalSeconds <= 0 {
+		return fmt.Errorf("simulator.block_interval_seconds must be > 0")
+	}
+	if cfg.Simulator.BlockGasLimit == 0 {
+		return fmt.Errorf("simulator.block_gas_limit must be > 0")
+	}
+	if cfg.Simulator.Mode == "replay" && cfg.Simulator.DatasetPath == "" {
+		return fmt.Errorf("simulator.dataset_path is required in replay mode")
 	}
 	for i, b := range cfg.Dispatcher.Builders {
 		if b.Name == "" {

@@ -5,13 +5,12 @@ import (
 	"math/big"
 	"rebate/mylog"
 	"rebate/pkg/types"
+	"rebate/pkg/utils"
 	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
-	etypes "github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/rlp"
 )
 
 // ============== Mock 模拟器 (用于 demo) ==============
@@ -21,6 +20,8 @@ type MockSimulator struct {
 	currentBlock uint64
 	mu           sync.RWMutex
 }
+
+const mockBlockGasLimit = 30000000
 
 // NewMockSimulator 创建 Mock 模拟器
 func NewMockSimulator() *MockSimulator {
@@ -74,8 +75,8 @@ func (m *MockSimulator) generateMockLogs(body []types.MevBundleBody) []types.Sim
 
 		if elem.Tx != nil {
 			// 解析交易获取目标地址
-			var tx etypes.Transaction
-			if err := rlp.DecodeBytes(*elem.Tx, &tx); err == nil && tx.To() != nil {
+			tx, err := utils.DecodeTransaction(*elem.Tx)
+			if err == nil && tx.To() != nil {
 				// 模拟一个 Uniswap V2 Swap 日志
 				logs.TxLogs = []types.SimLog{
 					{
@@ -110,4 +111,19 @@ func (m *MockSimulator) GetBlock() uint64 {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.currentBlock
+}
+
+func (m *MockSimulator) CurrentBlock() uint64 {
+	return m.GetBlock()
+}
+
+func (m *MockSimulator) AdvanceBlock() (uint64, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.currentBlock++
+	return m.currentBlock, true
+}
+
+func (m *MockSimulator) BlockGasLimit() uint64 {
+	return mockBlockGasLimit
 }
