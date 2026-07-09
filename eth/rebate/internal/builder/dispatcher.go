@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"math/rand"
 	"net/http"
 	"rebate/mylog"
@@ -84,9 +85,9 @@ func (d *Dispatcher) Log() *DispatchLog {
 	return d.log
 }
 
-// Dispatch 将 bundle 按 score 加权分发给一个 builder。
+// Dispatch 将 bundle 按动态 score 加权分发给一个 builder。
 // 如果 bundle.Privacy.Builders 非空，则只在该列表内的 builder 中选择。
-func (d *Dispatcher) Dispatch(ctx context.Context, bundle *types.SendMevBundleArgs) error {
+func (d *Dispatcher) Dispatch(ctx context.Context, bundle *types.SendMevBundleArgs, result *types.SimMevBundleResponse) error {
 	candidates := d.registry.All()
 	if len(candidates) == 0 {
 		return fmt.Errorf("no builders registered")
@@ -117,6 +118,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, bundle *types.SendMevBundleAr
 		Str("bundleHash", bundleHash.Hex()).
 		Str("builder", target.Name).
 		Str("url", target.URL).
+		Float64("baseScore", target.BaseScore).
 		Float64("score", target.Score).
 		Float64("totalScore", d.registry.TotalScore()).
 		Msg("Dispatching bundle to builder")
@@ -142,6 +144,30 @@ func (d *Dispatcher) Dispatch(ctx context.Context, bundle *types.SendMevBundleAr
 			Str("builder", target.Name).
 			Msg("Bundle dispatched successfully")
 	}
+
+	observation := BuilderObservation{
+		DispatchAttempts: 1,
+	}
+	if err == nil {
+		observation.DispatchSuccesses = 1
+		if valueCreated := extractValueCreated(result); valueCreated.Sign() > 0 {
+			observation.ValueCreatedWei = valueCreated
+		}
+	}
+	updatedBuilder, observeErr := d.registry.Observe(target.Name, observation)
+	if observeErr != nil {
+		mylog.Logger.Warn().Err(observeErr).Str("builder", target.Name).Msg("Failed to update builder dynamic score")
+	} else {
+		mylog.Logger.Info().
+			Str("builder", updatedBuilder.Name).
+			Float64("baseScore", updatedBuilder.BaseScore).
+			Float64("effectiveScore", updatedBuilder.Score).
+			Uint64("attempts", updatedBuilder.Stats.DispatchAttempts).
+			Uint64("successes", updatedBuilder.Stats.DispatchSuccesses).
+			Uint64("sandwichAttacks", updatedBuilder.Stats.SandwichAttacks).
+			Uint64("wellBehavedEvents", updatedBuilder.Stats.WellBehavedEvents).
+			Msg("Builder score updated")
+	}
 	d.log.append(rec)
 	return err
 }
@@ -165,6 +191,20 @@ func (d *Dispatcher) weightedPick(builders []*BuilderInfo) *BuilderInfo {
 		}
 	}
 	return builders[len(builders)-1]
+}
+
+func extractValueCreated(result *types.SimMevBundleResponse) *big.Int {
+	if result == nil {
+		return big.NewInt(0)
+	}
+
+	total := big.NewInt(0)
+	total.Add(total, result.Profit.ToInt())
+	total.Add(total, result.RefundableValue.ToInt())
+	if total.Sign() < 0 {
+		return big.NewInt(0)
+	}
+	return total
 }
 
 // send 通过 JSON-RPC 将 bundle 发送给指定 builder

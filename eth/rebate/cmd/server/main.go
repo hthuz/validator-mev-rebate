@@ -63,6 +63,7 @@ func main() {
 		}
 	}
 	dispatcher := builder.NewDispatcher(registry)
+	builderHandler := builder.NewHTTPHandler(registry)
 
 	// 打印已注册的 builder 列表
 	logger.Info().Msg("=== Registered Builders ===")
@@ -103,6 +104,8 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
 	})
+	mux.HandleFunc("/builders/scores", builderHandler.GetScores)
+	mux.HandleFunc("/builders/observe", builderHandler.ObserveBuilder)
 
 	metricsHandler := metrics.NewMetricsHandler(metricsStore)
 	mux.HandleFunc("/metrics/block/", metricsHandler.GetBlockMetrics)
@@ -281,6 +284,8 @@ func printUsage(port string) {
 	logger.Info().Msg("  GET /metrics/searchers              : All searchers")
 	logger.Info().Msg("  GET /metrics/global                 : Global MEV stats")
 	logger.Info().Msg("  GET /metrics/recent                 : Recent blocks")
+	logger.Info().Msg("  GET /builders/scores               : Builder dynamic scores")
+	logger.Info().Msg("  POST /builders/observe             : Report builder behavior")
 	logger.Info().Msg("")
 	logger.Info().Msgf("Example: curl -X POST http://localhost:%s -H 'Content-Type: application/json' -d '{...}'", port)
 	logger.Info().Msg("Press Ctrl+C to stop")

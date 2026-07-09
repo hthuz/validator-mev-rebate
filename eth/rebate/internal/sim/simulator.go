@@ -155,7 +155,7 @@ func (w *SimulationWorker) process(ctx context.Context, item *queue.BundleQueueI
 
 	// 6. 计算并设置 MatchingHash (用于 Hint)
 	bundle.Metadata.MatchingHash = utils.CalculateMatchingHash(bundle.Metadata.BundleHash, w.signer)
-        w.store.IndexMatchingHash(bundle.Metadata.MatchingHash, bundle.Metadata.BundleHash)
+	w.store.IndexMatchingHash(bundle.Metadata.MatchingHash, bundle.Metadata.BundleHash)
 
 	// 7. 提取并广播 Hints
 	if bundle.Privacy != nil && bundle.Privacy.Hints != types.HintNone {
@@ -188,7 +188,7 @@ func (w *SimulationWorker) sendToBuilders(bundle *types.SendMevBundleArgs, resul
 		return
 	}
 	ctx := context.Background()
-	if err := w.dispatcher.Dispatch(ctx, bundle); err != nil {
+	if err := w.dispatcher.Dispatch(ctx, bundle, result); err != nil {
 		mylog.Logger.Error().
 			Err(err).
 			Str("bundleHash", bundle.Metadata.BundleHash.Hex()).
