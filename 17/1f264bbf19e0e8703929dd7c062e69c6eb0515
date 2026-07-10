@@ -1,0 +1,16 @@
+eth/rebate/scripts/temp2.md
+  h_2a85d57ee0b0fa 1-19
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "171f264bbf19e0e8703929dd7c062e69c6eb0515",
+  "prompts": {},
+  "humans": {
+    "h_2a85d57ee0b0fa": {
+      "author": "hthuz <hanggangzhu@zju.edu.cn>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
