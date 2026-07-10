@@ -9,6 +9,7 @@ RUN_DIR="${ROOT_DIR}/run"
 SERVER_LOG="${LOG_DIR}/server.log"
 SEARCHER_LOG="${LOG_DIR}/searcher.log"
 USER_LOG="${LOG_DIR}/user.log"
+BUILDER_REPORT_LOG="${LOG_DIR}/builder_report.log"
 
 SERVER_PID_FILE="${RUN_DIR}/server.pid"
 SEARCHER_PID_FILE="${RUN_DIR}/searcher.pid"
@@ -41,6 +42,7 @@ Logs:
   ${SERVER_LOG}
   ${SEARCHER_LOG}
   ${USER_LOG}
+  ${BUILDER_REPORT_LOG}
 EOF
 }
 
@@ -179,11 +181,13 @@ start_all() {
   echo "server log   : ${SERVER_LOG}"
   echo "searcher log : ${SEARCHER_LOG}"
   echo "user log     : ${USER_LOG}"
+  echo "builder log  : ${BUILDER_REPORT_LOG}"
   echo
   echo "watch logs:"
   echo "  tail -f ${SERVER_LOG}"
   echo "  tail -f ${SEARCHER_LOG}"
   echo "  tail -f ${USER_LOG}"
+  echo "  tail -f ${BUILDER_REPORT_LOG}"
 }
 
 stop_all() {

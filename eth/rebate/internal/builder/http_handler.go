@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"math/big"
 	"net/http"
+	"rebate/mylog"
 )
 
 type HTTPHandler struct {
@@ -85,6 +86,17 @@ func (h *HTTPHandler) ObserveBuilder(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+
+	mylog.BuilderLogger.Info().
+		Str("event", "builder_observation_recorded").
+		Str("builder", builder.Name).
+		Uint64("dispatch_attempts", req.DispatchAttempts).
+		Uint64("dispatch_successes", req.DispatchSuccesses).
+		Uint64("sandwich_attacks", req.SandwichAttacks).
+		Uint64("well_behaved_events", req.WellBehavedEvents).
+		Str("value_created_wei", req.ValueCreatedWei).
+		Float64("effective_score", builder.Score).
+		Msg("builder observation recorded")
 
 	writeJSON(w, http.StatusOK, BuilderScoreView{
 		Name:      builder.Name,

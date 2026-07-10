@@ -122,6 +122,15 @@ func (d *Dispatcher) Dispatch(ctx context.Context, bundle *types.SendMevBundleAr
 		Float64("score", target.Score).
 		Float64("totalScore", d.registry.TotalScore()).
 		Msg("Dispatching bundle to builder")
+	mylog.BuilderLogger.Info().
+		Str("event", "builder_dispatch_selected").
+		Str("bundle_hash", bundleHash.Hex()).
+		Str("builder", target.Name).
+		Str("url", target.URL).
+		Float64("base_score", target.BaseScore).
+		Float64("effective_score", target.Score).
+		Float64("total_score", d.registry.TotalScore()).
+		Msg("builder dispatch selected")
 
 	err := d.send(ctx, target, bundle)
 
@@ -138,11 +147,24 @@ func (d *Dispatcher) Dispatch(ctx context.Context, bundle *types.SendMevBundleAr
 			Str("bundleHash", bundleHash.Hex()).
 			Str("builder", target.Name).
 			Msg("Bundle dispatch failed")
+		mylog.BuilderLogger.Warn().
+			Str("event", "builder_dispatch_result").
+			Str("bundle_hash", bundleHash.Hex()).
+			Str("builder", target.Name).
+			Bool("success", false).
+			Str("error", err.Error()).
+			Msg("builder dispatch failed")
 	} else {
 		mylog.Logger.Info().
 			Str("bundleHash", bundleHash.Hex()).
 			Str("builder", target.Name).
 			Msg("Bundle dispatched successfully")
+		mylog.BuilderLogger.Info().
+			Str("event", "builder_dispatch_result").
+			Str("bundle_hash", bundleHash.Hex()).
+			Str("builder", target.Name).
+			Bool("success", true).
+			Msg("builder dispatch succeeded")
 	}
 
 	observation := BuilderObservation{
@@ -167,6 +189,18 @@ func (d *Dispatcher) Dispatch(ctx context.Context, bundle *types.SendMevBundleAr
 			Uint64("sandwichAttacks", updatedBuilder.Stats.SandwichAttacks).
 			Uint64("wellBehavedEvents", updatedBuilder.Stats.WellBehavedEvents).
 			Msg("Builder score updated")
+		mylog.BuilderLogger.Info().
+			Str("event", "builder_score_updated").
+			Str("builder", updatedBuilder.Name).
+			Float64("base_score", updatedBuilder.BaseScore).
+			Float64("effective_score", updatedBuilder.Score).
+			Uint64("attempts", updatedBuilder.Stats.DispatchAttempts).
+			Uint64("successes", updatedBuilder.Stats.DispatchSuccesses).
+			Uint64("dispatch_failures", updatedBuilder.Stats.DispatchFailures).
+			Uint64("sandwich_attacks", updatedBuilder.Stats.SandwichAttacks).
+			Uint64("well_behaved_events", updatedBuilder.Stats.WellBehavedEvents).
+			Uint64("valuable_order_flow", updatedBuilder.Stats.ValuableOrderFlow).
+			Msg("builder score updated")
 	}
 	d.log.append(rec)
 	return err
@@ -215,7 +249,7 @@ func (d *Dispatcher) send(ctx context.Context, b *BuilderInfo, bundle *types.Sen
 		ID:      1,
 	}
 
-	params, err := json.Marshal([]interface{}{bundle})
+	params, err := json.Marshal([]any{bundle})
 	if err != nil {
 		return fmt.Errorf("marshal params: %w", err)
 	}

@@ -58,6 +58,12 @@ func (b *MockBuilder) handleSendMevBundle(w http.ResponseWriter, req types.JSONR
 		Interface("id", req.ID).
 		RawJSON("params", req.Params).
 		Msg("MockBuilder received eth_sendMevBundle")
+	mylog.BuilderLogger.Info().
+		Str("event", "mock_builder_received_bundle").
+		Str("builder_addr", b.addr).
+		Interface("id", req.ID).
+		RawJSON("params", req.Params).
+		Msg("mock builder received eth_sendMevBundle")
 
 	writeResult(w, req.ID, true)
 }
@@ -67,12 +73,18 @@ func (b *MockBuilder) handleSendRawTransaction(w http.ResponseWriter, req types.
 		Interface("id", req.ID).
 		RawJSON("params", req.Params).
 		Msg("MockBuilder received eth_sendRawTransaction")
+	mylog.BuilderLogger.Info().
+		Str("event", "mock_builder_received_raw_tx").
+		Str("builder_addr", b.addr).
+		Interface("id", req.ID).
+		RawJSON("params", req.Params).
+		Msg("mock builder received eth_sendRawTransaction")
 
 	// 返回一个占位 tx hash
 	writeResult(w, req.ID, "0x0000000000000000000000000000000000000000000000000000000000000000")
 }
 
-func writeResult(w http.ResponseWriter, id interface{}, result interface{}) {
+func writeResult(w http.ResponseWriter, id any, result any) {
 	resp := types.JSONRPCResponse{
 		JSONRPC: "2.0",
 		ID:      id,
@@ -82,7 +94,7 @@ func writeResult(w http.ResponseWriter, id interface{}, result interface{}) {
 	json.NewEncoder(w).Encode(resp)
 }
 
-func writeError(w http.ResponseWriter, id interface{}, code int, message string) {
+func writeError(w http.ResponseWriter, id any, code int, message string) {
 	resp := types.JSONRPCResponse{
 		JSONRPC: "2.0",
 		ID:      id,
