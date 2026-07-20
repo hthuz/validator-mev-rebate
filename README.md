@@ -24,3 +24,7 @@ https://mev-share.flashbots.net/
   go run ./cmd/server/main.go -config /path/to/my-config.yaml                                                                     
                                                                                                                                   
   环境变量也可以覆盖配置，例如 REBATE_SERVER_PORT=9090。
+
+
+方向五:MEV 收益的区块内再分配(smoothing),而不是点对点分成
+现在 MEV-Share 的分润模式是"谁被 backrun,谁分钱",这其实制造了一个新的博弈:searcher 仍然有动机去精确定位、瞄准某个具体用户交易。builder 由于能看到整个区块的全貌,其实有能力做一件 searcher 做不到的事——把这个区块里所有由订单流本身创造出来的 MEV,按贡献比例(而不是按"谁被打中")分给这个区块里的所有订单流提供方。这样一来,攻击某个特定用户不再比"雨露均沾"更有利可图,某种程度上削弱了精准狙击单个用户的经济动机。这个方向目前还比较偏研究/构想阶段,没有看到大规模落地的实现,是相对有创新空间的部分。
