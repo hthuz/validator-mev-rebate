@@ -5,42 +5,49 @@ import (
 	"math/big"
 	"net/http"
 	"rebate/mylog"
+	"time"
 )
 
 type HTTPHandler struct {
 	registry *Registry
+	strategy StrategyConfig
 }
 
 type ObserveBuilderRequest struct {
-	Builder           string `json:"builder"`
-	DispatchAttempts  uint64 `json:"dispatchAttempts,omitempty"`
-	DispatchSuccesses uint64 `json:"dispatchSuccesses,omitempty"`
-	SandwichAttacks   uint64 `json:"sandwichAttacks,omitempty"`
-	WellBehavedEvents uint64 `json:"wellBehavedEvents,omitempty"`
-	ValueCreatedWei   string `json:"valueCreatedWei,omitempty"`
+	Builder           string   `json:"builder"`
+	DispatchAttempts  uint64   `json:"dispatchAttempts,omitempty"`
+	DispatchSuccesses uint64   `json:"dispatchSuccesses,omitempty"`
+	SandwichAttacks   uint64   `json:"sandwichAttacks,omitempty"`
+	WellBehavedEvents uint64   `json:"wellBehavedEvents,omitempty"`
+	ValueCreatedWei   string   `json:"valueCreatedWei,omitempty"`
+	Reward            *float64 `json:"reward,omitempty"`
 }
 
 type BuilderScoreView struct {
-	Name      string       `json:"name"`
-	URL       string       `json:"url"`
-	BaseScore float64      `json:"baseScore"`
-	Score     float64      `json:"score"`
-	Stats     BuilderStats `json:"stats"`
+	Name                 string       `json:"name"`
+	URL                  string       `json:"url"`
+	BaseScore            float64      `json:"baseScore"`
+	Score                float64      `json:"score"`
+	Stats                BuilderStats `json:"stats"`
+	RegisteredAt         string       `json:"registeredAt"`
+	ExplorationCandidate bool         `json:"explorationCandidate"`
 }
 
-func NewHTTPHandler(registry *Registry) *HTTPHandler {
-	return &HTTPHandler{registry: registry}
+func NewHTTPHandler(registry *Registry, strategy StrategyConfig) *HTTPHandler {
+	return &HTTPHandler{registry: registry, strategy: normalizeStrategyConfig(strategy)}
 }
 
 func (h *HTTPHandler) GetScores(w http.ResponseWriter, r *http.Request) {
 	views := make([]BuilderScoreView, 0)
 	for _, builder := range h.registry.All() {
 		views = append(views, BuilderScoreView{
-			Name:      builder.Name,
-			URL:       builder.URL,
-			BaseScore: builder.BaseScore,
-			Score:     builder.Score,
-			Stats:     builder.Stats,
+			Name:                 builder.Name,
+			URL:                  builder.URL,
+			BaseScore:            builder.BaseScore,
+			Score:                builder.Score,
+			Stats:                builder.Stats,
+			RegisteredAt:         builder.RegisteredAt.Format(time.RFC3339),
+			ExplorationCandidate: h.isExplorationCandidate(builder),
 		})
 	}
 
@@ -81,6 +88,7 @@ func (h *HTTPHandler) ObserveBuilder(w http.ResponseWriter, r *http.Request) {
 		SandwichAttacks:   req.SandwichAttacks,
 		WellBehavedEvents: req.WellBehavedEvents,
 		ValueCreatedWei:   valueCreated,
+		Reward:            req.Reward,
 	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -95,16 +103,33 @@ func (h *HTTPHandler) ObserveBuilder(w http.ResponseWriter, r *http.Request) {
 		Uint64("sandwich_attacks", req.SandwichAttacks).
 		Uint64("well_behaved_events", req.WellBehavedEvents).
 		Str("value_created_wei", req.ValueCreatedWei).
+		Float64("average_reward", builder.Stats.AverageReward).
+		Float64("last_reward", builder.Stats.LastReward).
 		Float64("effective_score", builder.Score).
 		Msg("builder observation recorded")
 
 	writeJSON(w, http.StatusOK, BuilderScoreView{
-		Name:      builder.Name,
-		URL:       builder.URL,
-		BaseScore: builder.BaseScore,
-		Score:     builder.Score,
-		Stats:     builder.Stats,
+		Name:                 builder.Name,
+		URL:                  builder.URL,
+		BaseScore:            builder.BaseScore,
+		Score:                builder.Score,
+		Stats:                builder.Stats,
+		RegisteredAt:         builder.RegisteredAt.Format(time.RFC3339),
+		ExplorationCandidate: h.isExplorationCandidate(builder),
 	})
+}
+
+func (h *HTTPHandler) isExplorationCandidate(builder *BuilderInfo) bool {
+	if builder == nil || !h.strategy.ExplorationEnabled {
+		return false
+	}
+	if builder.Stats.DispatchAttempts < h.strategy.MinExploreDispatches {
+		return true
+	}
+	if h.strategy.NewProducerGracePeriod > 0 && time.Since(builder.RegisteredAt) < h.strategy.NewProducerGracePeriod {
+		return true
+	}
+	return false
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

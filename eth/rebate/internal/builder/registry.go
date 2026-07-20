@@ -16,12 +16,20 @@ const (
 	wellBehavedBonusPerEvent  = 0.05
 	consecutiveFailurePenalty = 0.12
 	maxValueReward            = 0.75
+	rewardSuccessWeight       = 1.00
+	rewardValueWeight         = 0.60
+	rewardWellBehavedWeight   = 0.15
+	rewardFailureWeight       = 0.70
+	rewardSandwichWeight      = 1.10
+	minObservedReward         = -2.0
+	maxObservedReward         = 2.0
 )
 
 // BuilderInfo 描述一个 builder 节点
 type BuilderInfo struct {
 	Name          string
 	URL           string
+	RegisteredAt  time.Time
 	BaseScore     float64 // 配置分，表示 builder 的初始信誉
 	Score         float64 // 动态分，决定实际分发权重
 	Stats         BuilderStats
@@ -38,6 +46,10 @@ type BuilderStats struct {
 	WellBehavedEvents   uint64
 	ValuableOrderFlow   uint64
 	ConsecutiveFailures uint64
+	RewardSamples       uint64
+	TotalReward         float64
+	AverageReward       float64
+	LastReward          float64
 	LastUpdatedAt       time.Time
 }
 
@@ -52,6 +64,7 @@ type BuilderObservation struct {
 	SandwichAttacks   uint64
 	WellBehavedEvents uint64
 	ValueCreatedWei   *big.Int
+	Reward            *float64
 }
 
 // Registry 管理所有已注册的 builder
@@ -82,6 +95,7 @@ func (r *Registry) Register(name, url string, score float64) error {
 	r.builders = append(r.builders, &BuilderInfo{
 		Name:          name,
 		URL:           url,
+		RegisteredAt:  time.Now(),
 		BaseScore:     score,
 		Score:         score,
 		totalValueWei: big.NewInt(0),
@@ -145,6 +159,11 @@ func (r *Registry) Observe(name string, observation BuilderObservation) (*Builde
 			b.Stats.ValuableOrderFlow++
 		}
 
+		reward := computeReward(observation)
+		b.Stats.RewardSamples++
+		b.Stats.TotalReward += reward
+		b.Stats.AverageReward = b.Stats.TotalReward / float64(b.Stats.RewardSamples)
+		b.Stats.LastReward = reward
 		b.Stats.LastUpdatedAt = time.Now()
 		b.Score = computeEffectiveScore(b)
 		return cloneBuilderInfo(b), nil
@@ -210,6 +229,32 @@ func computeEffectiveScore(builder *BuilderInfo) float64 {
 
 	score := base * reliabilityFactor * failureFactor * sandwichFactor * wellBehavedFactor * valueFactor
 	return clamp(score, minEffectiveScore, base*maxEffectiveScoreBoost)
+}
+
+func computeReward(observation BuilderObservation) float64 {
+	if observation.Reward != nil {
+		return clamp(*observation.Reward, minObservedReward, maxObservedReward)
+	}
+
+	successRate := 0.0
+	failureRate := 0.0
+	if observation.DispatchAttempts > 0 {
+		successRate = float64(observation.DispatchSuccesses) / float64(observation.DispatchAttempts)
+		failures := observation.DispatchAttempts - observation.DispatchSuccesses
+		failureRate = float64(failures) / float64(observation.DispatchAttempts)
+	}
+
+	valueComponent := clamp(valueReward(observation.ValueCreatedWei), 0, maxValueReward)
+	wellBehavedComponent := clamp(float64(observation.WellBehavedEvents)*wellBehavedBonusPerEvent, 0, 0.50)
+	sandwichPenalty := float64(observation.SandwichAttacks) * rewardSandwichWeight
+
+	reward := rewardSuccessWeight*successRate +
+		rewardValueWeight*valueComponent +
+		rewardWellBehavedWeight*wellBehavedComponent -
+		rewardFailureWeight*failureRate -
+		sandwichPenalty
+
+	return clamp(reward, minObservedReward, maxObservedReward)
 }
 
 func valueReward(valueWei *big.Int) float64 {

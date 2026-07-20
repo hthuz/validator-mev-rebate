@@ -62,11 +62,27 @@ func main() {
 			logger.Fatal().Err(err).Str("builder", b.Name).Msg("Failed to register builder")
 		}
 	}
-	dispatcher := builder.NewDispatcher(registry)
-	builderHandler := builder.NewHTTPHandler(registry)
+	strategy := builder.StrategyConfig{
+		ExplorationEnabled:     cfg.Dispatcher.Exploration.Enabled,
+		ExplorationRate:        cfg.Dispatcher.Exploration.Rate,
+		MinExploreDispatches:   cfg.Dispatcher.Exploration.MinExploreDispatches,
+		NewProducerGracePeriod: time.Duration(cfg.Dispatcher.Exploration.NewProducerAgeSeconds) * time.Second,
+		UncertaintyWeight:      cfg.Dispatcher.Exploration.UncertaintyWeight,
+		FreshProducerBonus:     cfg.Dispatcher.Exploration.FreshProducerBonus,
+	}
+	dispatcher := builder.NewDispatcher(registry, strategy)
+	builderHandler := builder.NewHTTPHandler(registry, strategy)
 
 	// 打印已注册的 builder 列表
 	logger.Info().Msg("=== Registered Builders ===")
+	logger.Info().
+		Bool("explorationEnabled", strategy.ExplorationEnabled).
+		Float64("explorationRate", strategy.ExplorationRate).
+		Uint64("minExploreDispatches", strategy.MinExploreDispatches).
+		Dur("newProducerGracePeriod", strategy.NewProducerGracePeriod).
+		Float64("uncertaintyWeight", strategy.UncertaintyWeight).
+		Float64("freshProducerBonus", strategy.FreshProducerBonus).
+		Msg("Dispatcher exploration strategy")
 	totalScore := registry.TotalScore()
 	for _, b := range registry.All() {
 		logger.Info().

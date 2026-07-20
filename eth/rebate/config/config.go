@@ -18,9 +18,19 @@ type BuilderConfig struct {
 	Score float64 `mapstructure:"score"`
 }
 
+type ExplorationConfig struct {
+	Enabled               bool    `mapstructure:"enabled"`
+	Rate                  float64 `mapstructure:"rate"`
+	MinExploreDispatches  uint64  `mapstructure:"min_explore_dispatches"`
+	NewProducerAgeSeconds int     `mapstructure:"new_producer_age_seconds"`
+	UncertaintyWeight     float64 `mapstructure:"uncertainty_weight"`
+	FreshProducerBonus    float64 `mapstructure:"fresh_producer_bonus"`
+}
+
 // DispatcherConfig 分发器配置
 type DispatcherConfig struct {
-	Builders []BuilderConfig `mapstructure:"builders"`
+	Builders    []BuilderConfig   `mapstructure:"builders"`
+	Exploration ExplorationConfig `mapstructure:"exploration"`
 }
 
 // SimulatorConfig 模拟器配置
@@ -86,6 +96,12 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("simulator.dataset_path", "data/ethereum_transactions.csv")
 	v.SetDefault("simulator.block_interval_seconds", 2)
 	v.SetDefault("simulator.block_gas_limit", 30000000)
+	v.SetDefault("dispatcher.exploration.enabled", true)
+	v.SetDefault("dispatcher.exploration.rate", 0.20)
+	v.SetDefault("dispatcher.exploration.min_explore_dispatches", 5)
+	v.SetDefault("dispatcher.exploration.new_producer_age_seconds", 600)
+	v.SetDefault("dispatcher.exploration.uncertainty_weight", 1.25)
+	v.SetDefault("dispatcher.exploration.fresh_producer_bonus", 0.75)
 }
 
 func validate(cfg *Config) error {
@@ -114,6 +130,18 @@ func validate(cfg *Config) error {
 		if b.Score <= 0 {
 			return fmt.Errorf("dispatcher.builders[%d] %q: score must be > 0", i, b.Name)
 		}
+	}
+	if cfg.Dispatcher.Exploration.Rate < 0 || cfg.Dispatcher.Exploration.Rate > 1 {
+		return fmt.Errorf("dispatcher.exploration.rate must be in [0,1]")
+	}
+	if cfg.Dispatcher.Exploration.NewProducerAgeSeconds < 0 {
+		return fmt.Errorf("dispatcher.exploration.new_producer_age_seconds must be >= 0")
+	}
+	if cfg.Dispatcher.Exploration.UncertaintyWeight < 0 {
+		return fmt.Errorf("dispatcher.exploration.uncertainty_weight must be >= 0")
+	}
+	if cfg.Dispatcher.Exploration.FreshProducerBonus < 0 {
+		return fmt.Errorf("dispatcher.exploration.fresh_producer_bonus must be >= 0")
 	}
 	for i, m := range cfg.MockBuilders {
 		if m.Addr == "" {

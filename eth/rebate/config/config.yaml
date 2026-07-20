@@ -11,6 +11,13 @@ simulator:
 # score 是基础分。运行时会基于分发成功率、价值产出、well-behaved 事件、
 # sandwich 攻击报告等行为信号，动态调整实际分发权重。
 dispatcher:
+  exploration:
+    enabled: true
+    rate: 0.20
+    min_explore_dispatches: 5
+    new_producer_age_seconds: 600
+    uncertainty_weight: 1.25
+    fresh_producer_bonus: 0.75
   builders:
     - name: builder-alpha
       url: http://localhost:18545
