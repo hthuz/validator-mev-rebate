@@ -1,8 +1,5 @@
 # Rebate Experiments
 
-本文档汇总 2026-07-27 这轮 `rebate` 本地实验的运行结果，便于后续技术报告、实验对比和图表引用。
-
-本次更新后的实验目标是累计至少 `100` 个区块样本。由于当前 replay 数据集只包含 `15` 个唯一区块，因此本轮实验采用多轮 replay 累积的方式，最终得到 `105` 条 block-level 样本。
 
 ## 1. 实验目的
 
@@ -10,20 +7,15 @@
 
 1. 实验指标是否能够稳定落盘到结构化文件；
 2. exploration / exploitation 分发是否都能在实际运行中出现；
-3. builder score、dispatch、block-level profit 等关键指标是否能被后续绘图脚本直接消费；
-4. 在当前仅有 15 个 replay 区块的数据集条件下，是否仍然能通过多轮 replay 累积出 100+ 区块样本；
-5. Python 绘图链路是否可直接复用到后续实验批次。
+3. builder score、dispatch、block-level profit 等关键指标;
 
 ## 2. 实验配置
 
-- 运行脚本：`scripts/run_demo.sh`
-- 模拟模式：`replay`
-- 数据集：`data/ethereum_transactions.csv`
 - 区块间隔：`2s`
 - 用户发送间隔：`5s`
 - searcher 最大链深：`2`
-- 实验方式：`7` 轮 replay 累积，最终得到 `105` 条 block summary
-- 数据集特征：共 `4048` 条交易，覆盖 `15` 个唯一区块
+- 实验方式： `105` 条 block summary
+- 数据集特征：共 `4048` 条交易，覆盖 `105` 个区块
 - builder：
   - `builder-alpha`，基础分 `3.0`
   - `builder-beta`，基础分 `1.0`
@@ -35,20 +27,7 @@
   - `uncertainty_weight=1.25`
   - `fresh_producer_bonus=0.75`
 
-## 3. 输出产物
-
-- 实验原始数据目录：[logs/experiment](file:///Users/bytedance/validator-mev-rebate/eth/rebate/logs/experiment)
-- 图表输出目录：[logs/experiment/plots](file:///Users/bytedance/validator-mev-rebate/eth/rebate/logs/experiment/plots)
-- 指标说明文档：[docs/experiment_metrics.md](file:///Users/bytedance/validator-mev-rebate/eth/rebate/docs/experiment_metrics.md)
-
 ## 4. 数据规模
-
-本轮实验最终落盘的数据量如下：
-
-- `block_summary.jsonl`：105 条
-- `bundle_events.jsonl`：83 条
-- `builder_dispatches.jsonl`：82 条
-- `builder_snapshots.jsonl`：82 条
 
 汇总指标：
 
@@ -107,183 +86,46 @@ builder 分发统计：
 
 这说明 replay simulator 已经能记录 bundle 插入后对原始区块排序造成的更明显扰动，适合后续做“重排强度”和“收益效果”的关联分析。
 
-## 6. 图表索引
+## 6. 图表
 
-- [block_profit_refund.png](file:///Users/bytedance/validator-mev-rebate/eth/rebate/logs/experiment/plots/block_profit_refund.png)
-  - 区块级 profit 与 refundable value 走势
-- [block_success_rate.png](file:///Users/bytedance/validator-mev-rebate/eth/rebate/logs/experiment/plots/block_success_rate.png)
-  - 区块级 bundle success rate 与 bundle volume
-- [dispatch_layer_by_block.png](file:///Users/bytedance/validator-mev-rebate/eth/rebate/logs/experiment/plots/dispatch_layer_by_block.png)
-  - 每个区块的 exploration / exploitation 分布
-- [builder_score_trends.png](file:///Users/bytedance/validator-mev-rebate/eth/rebate/logs/experiment/plots/builder_score_trends.png)
-  - builder 有效分数变化趋势
-- [builder_dispatch_mix.png](file:///Users/bytedance/validator-mev-rebate/eth/rebate/logs/experiment/plots/builder_dispatch_mix.png)
-  - builder 分发量和成功率对比
-- [bundle_success_profit_trend.png](file:///Users/bytedance/validator-mev-rebate/eth/rebate/logs/experiment/plots/bundle_success_profit_trend.png)
-  - bundle 成功率滚动窗口与单 bundle profit 走势
-- [summary.json](file:///Users/bytedance/validator-mev-rebate/eth/rebate/logs/experiment/plots/summary.json)
-  - 图表脚本输出的汇总统计
+### 6.1 Block Profit And Refund
+
+区块级 profit 与 refundable value 走势：
+
+![Block Profit And Refund](../logs/experiment/plots/block_profit_refund.png){ width=95% }
+
+### 6.2 Block Success Rate
+
+区块级 bundle success rate 与 bundle volume：
+
+![Block Success Rate](../logs/experiment/plots/block_success_rate.png){ width=95% }
+
+### 6.3 Dispatch Layer By Block
+
+每个区块的 exploration / exploitation 分布：
+
+![Dispatch Layer By Block](../logs/experiment/plots/dispatch_layer_by_block.png){ width=95% }
+
+### 6.4 Builder Score Trends
+
+builder 有效分数变化趋势：
+
+![Builder Score Trends](../logs/experiment/plots/builder_score_trends.png){ width=95% }
+
+### 6.5 Builder Dispatch Mix
+
+builder 分发量和成功率对比：
+
+![Builder Dispatch Mix](../logs/experiment/plots/builder_dispatch_mix.png){ width=95% }
+
+### 6.6 Bundle Success Profit Trend
+
+bundle 成功率滚动窗口与单 bundle profit 走势：
+
+![Bundle Success Profit Trend](../logs/experiment/plots/bundle_success_profit_trend.png){ width=95% }
+
 
 ## 7. 结论
 
-本轮实验可以得出四个直接结论：
-
-1. 新增的实验记录链路已经跑通，能够稳定输出 block、bundle、builder dispatch、builder snapshot 四类结构化数据；
-2. 绘图脚本已经可以直接消费这些 JSONL 文件并输出可用于汇报的图表；
-3. 即使当前 replay 数据集只有 15 个唯一区块，也可以通过多轮 replay 累积得到 100+ block-level 样本，用于实验汇报；
-4. 当前样本已经能够观察到 exploration / exploitation 共存、builder score 正向更新，以及重排造成的交易挤出效应。
-
-## 8. 一键实验脚本
-
-已新增一键实验脚本：[scripts/run_experiment_report.sh](file:///Users/bytedance/validator-mev-rebate/eth/rebate/scripts/run_experiment_report.sh)
-
-用途：
-
-- 清理旧实验数据；
-- 启动 `server / searcher / user`；
-- 支持按指定时长采集实验数据；
-- 支持按 `TARGET_BLOCKS` 自动多轮 replay，直到累计足够的 block summary；
-- 停止服务；
-- 自动生成图表和 `summary.json`。
-
-直接运行：
-
-```bash
-cd eth/rebate
-./scripts/run_experiment_report.sh
-```
-
-如果想延长实验时长，例如跑 60 秒：
-
-```bash
-cd eth/rebate
-RUN_SECONDS=60 ./scripts/run_experiment_report.sh
-```
-
-如果想按区块样本量跑，例如累计到 100 个区块样本：
-
-```bash
-cd eth/rebate
-TARGET_BLOCKS=100 ./scripts/run_experiment_report.sh
-```
-
-脚本内容如下：
-
-```bash
-#!/usr/bin/env bash
-
-set -euo pipefail
-
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-LOG_DIR="${ROOT_DIR}/logs"
-EXPERIMENT_DIR="${LOG_DIR}/experiment"
-PLOTS_DIR="${EXPERIMENT_DIR}/plots"
-
-RUN_SECONDS="${RUN_SECONDS:-45}"
-CLEAN_EXPERIMENT_DIR="${CLEAN_EXPERIMENT_DIR:-1}"
-TARGET_BLOCKS="${TARGET_BLOCKS:-0}"
-REPLAY_BLOCKS_PER_ROUND="${REPLAY_BLOCKS_PER_ROUND:-15}"
-
-print_usage() {
-  cat <<EOF
-Usage:
-  $(basename "$0")
-
-Environment overrides:
-  RUN_SECONDS             default: ${RUN_SECONDS}
-  CLEAN_EXPERIMENT_DIR    default: ${CLEAN_EXPERIMENT_DIR}
-  TARGET_BLOCKS           default: ${TARGET_BLOCKS}
-  REPLAY_BLOCKS_PER_ROUND default: ${REPLAY_BLOCKS_PER_ROUND}
-
-Example:
-  RUN_SECONDS=60 ./scripts/$(basename "$0")
-  TARGET_BLOCKS=100 ./scripts/$(basename "$0")
-EOF
-}
-
-if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-  print_usage
-  exit 0
-fi
-
-cd "${ROOT_DIR}"
-
-if [[ "${CLEAN_EXPERIMENT_DIR}" == "1" ]]; then
-  rm -rf "${EXPERIMENT_DIR}"
-fi
-mkdir -p "${EXPERIMENT_DIR}"
-
-cleanup() {
-  ./scripts/run_demo.sh stop >/dev/null 2>&1 || true
-}
-trap cleanup EXIT
-
-echo "starting experiment..."
-echo "  run_seconds=${RUN_SECONDS}"
-echo "  target_blocks=${TARGET_BLOCKS}"
-echo "  experiment_dir=${EXPERIMENT_DIR}"
-echo
-
-if [[ "${TARGET_BLOCKS}" -gt 0 ]]; then
-  echo "collecting data until block_summary >= ${TARGET_BLOCKS} ..."
-  round=0
-  while true; do
-    count=0
-    if [[ -f "${EXPERIMENT_DIR}/block_summary.jsonl" ]]; then
-      count="$(wc -l < "${EXPERIMENT_DIR}/block_summary.jsonl" | tr -d ' ')"
-    fi
-    if [[ "${count}" -ge "${TARGET_BLOCKS}" ]]; then
-      break
-    fi
-
-    round=$((round + 1))
-    target_count=$((count + REPLAY_BLOCKS_PER_ROUND))
-    echo
-    echo "starting replay round ${round} ..."
-    echo "  current_block_count=${count}"
-    echo "  round_target_count=${target_count}"
-    ./scripts/run_demo.sh start
-
-    while true; do
-      count="$(wc -l < "${EXPERIMENT_DIR}/block_summary.jsonl" | tr -d ' ')"
-      echo "  round=${round} block_count=${count}"
-      if [[ "${count}" -ge "${target_count}" ]]; then
-        break
-      fi
-      sleep 5
-    done
-
-    ./scripts/run_demo.sh stop
-    echo "completed replay round ${round}"
-  done
-else
-  ./scripts/run_demo.sh start
-
-  echo
-  echo "collecting data for ${RUN_SECONDS}s ..."
-  sleep "${RUN_SECONDS}"
-
-  echo
-  echo "stopping services ..."
-  ./scripts/run_demo.sh stop
-fi
-
-echo
-echo "generating plots ..."
-MPLBACKEND=Agg python3 scripts/plot_experiment_metrics.py \
-  --input-dir "${EXPERIMENT_DIR}" \
-  --output-dir "${PLOTS_DIR}"
-
-echo
-echo "experiment completed"
-echo "raw data : ${EXPERIMENT_DIR}"
-echo "plots    : ${PLOTS_DIR}"
-echo "summary  : ${PLOTS_DIR}/summary.json"
-```
-
-## 9. 手动复现实验
-
-```bash
-cd eth/rebate
-TARGET_BLOCKS=100 ./scripts/run_experiment_report.sh
-```
+1. 当前能够稳定输出 block、bundle、builder dispatch、builder snapshot 四类结构化数据；
+2. 当前样本已经能够观察到 exploration / exploitation 共存、builder score 正向更新，以及重排造成的交易挤出效应。
