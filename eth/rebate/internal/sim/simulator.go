@@ -3,7 +3,9 @@ package sim
 import (
 	"context"
 	"crypto/ecdsa"
+	"rebate/internal/experiment"
 	"sync"
+	"time"
 
 	"rebate/internal/builder"
 	"rebate/internal/hints"
@@ -27,6 +29,7 @@ type SimulationWorker struct {
 	signer        *ecdsa.PrivateKey
 	metrics       *metrics.MetricsStore
 	dispatcher    *builder.Dispatcher
+	recorder      *experiment.Recorder
 	wg            sync.WaitGroup
 	stopCh        chan struct{}
 }
@@ -40,7 +43,12 @@ func NewSimulationWorker(
 	signer *ecdsa.PrivateKey,
 	metrics *metrics.MetricsStore,
 	dispatcher *builder.Dispatcher,
+	recorders ...*experiment.Recorder,
 ) *SimulationWorker {
+	var recorder *experiment.Recorder
+	if len(recorders) > 0 {
+		recorder = recorders[0]
+	}
 	return &SimulationWorker{
 		simulator:     simulator,
 		queue:         queue,
@@ -49,6 +57,7 @@ func NewSimulationWorker(
 		signer:        signer,
 		metrics:       metrics,
 		dispatcher:    dispatcher,
+		recorder:      recorder,
 		stopCh:        make(chan struct{}),
 	}
 }
@@ -150,6 +159,7 @@ func (w *SimulationWorker) process(ctx context.Context, item *queue.BundleQueueI
 
 		// 存储失败结果
 		w.store.StoreSimResult(bundle.Metadata.BundleHash, result)
+		w.recordBundleSimulation(bundle, result, searcher)
 		return nil
 	}
 
@@ -169,6 +179,7 @@ func (w *SimulationWorker) process(ctx context.Context, item *queue.BundleQueueI
 
 	// 8. 存储模拟结果
 	w.store.StoreSimResult(bundle.Metadata.BundleHash, result)
+	w.recordBundleSimulation(bundle, result, searcher)
 
 	// 9. 发送给 Builder (简化版: 只记录日志)
 	w.sendToBuilders(bundle, result)
@@ -194,4 +205,76 @@ func (w *SimulationWorker) sendToBuilders(bundle *types.SendMevBundleArgs, resul
 			Str("bundleHash", bundle.Metadata.BundleHash.Hex()).
 			Msg("Dispatcher failed to send bundle")
 	}
+}
+
+func (w *SimulationWorker) recordBundleSimulation(bundle *types.SendMevBundleArgs, result *types.SimMevBundleResponse, searcher common.Address) {
+	if w.recorder == nil || bundle == nil || bundle.Metadata == nil || result == nil {
+		return
+	}
+
+	txCount, nestedCount, hashRefCount := summarizeBundleBody(bundle.Body)
+	var requestedBuilders []string
+	var wantRefund *int
+	if bundle.Privacy != nil {
+		if len(bundle.Privacy.Builders) > 0 {
+			requestedBuilders = append(requestedBuilders, bundle.Privacy.Builders...)
+		}
+		wantRefund = bundle.Privacy.WantRefund
+	}
+
+	event := experiment.BundleSimulationEvent{
+		RecordedAt:         time.Now().UTC(),
+		BundleHash:         bundle.Metadata.BundleHash.Hex(),
+		TargetBlock:        uint64(bundle.Inclusion.BlockNumber),
+		MaxBlock:           uint64(bundle.Inclusion.MaxBlock),
+		RequestedBuilders:  requestedBuilders,
+		WantRefundPercent:  wantRefund,
+		BodyItemCount:      len(bundle.Body),
+		TxCount:            txCount,
+		NestedBundleCount:  nestedCount,
+		HashReferenceCount: hashRefCount,
+		IsBackrun:          hashRefCount > 0,
+		SimulationSuccess:  result.Success,
+		SimulationError:    result.Error,
+		ExecutionError:     result.ExecError,
+		GasUsed:            uint64(result.GasUsed),
+		ProfitWei:          result.Profit.ToInt().String(),
+		RefundableWei:      result.RefundableValue.ToInt().String(),
+		MevGasPriceWei:     result.MevGasPrice.ToInt().String(),
+	}
+	if searcher != (common.Address{}) {
+		event.Searcher = searcher.Hex()
+	}
+	if bundle.Metadata.MatchingHash != (common.Hash{}) {
+		event.MatchingHash = bundle.Metadata.MatchingHash.Hex()
+	}
+	if result.Block != nil {
+		event.SimulatedBlockNumber = uint64(result.Block.BlockNumber)
+		event.HistoricalTxCount = uint64(result.Block.HistoricalTxCount)
+		event.BundleInsertionIndex = uint64(result.Block.BundleInsertionIndex)
+		event.DisplacedTxCount = len(result.Block.DisplacedTxs)
+	}
+
+	if err := w.recorder.RecordBundleSimulation(event); err != nil {
+		mylog.Logger.Warn().Err(err).Msg("Failed to record bundle simulation event")
+	}
+}
+
+func summarizeBundleBody(body []types.MevBundleBody) (txCount int, nestedCount int, hashRefCount int) {
+	for _, item := range body {
+		if item.Tx != nil {
+			txCount++
+		}
+		if item.Hash != nil {
+			hashRefCount++
+		}
+		if item.Bundle != nil {
+			nestedCount++
+			subTxCount, subNestedCount, subHashRefCount := summarizeBundleBody(item.Bundle.Body)
+			txCount += subTxCount
+			nestedCount += subNestedCount
+			hashRefCount += subHashRefCount
+		}
+	}
+	return txCount, nestedCount, hashRefCount
 }

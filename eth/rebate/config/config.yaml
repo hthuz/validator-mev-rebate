@@ -7,6 +7,9 @@ simulator:
   block_interval_seconds: 2
   block_gas_limit: 30000000
 
+reporting:
+  experiment_dir: logs/experiment
+
 # 注册到分发器的 builder 节点
 # score 是基础分。运行时会基于分发成功率、价值产出、well-behaved 事件、
 # sandwich 攻击报告等行为信号，动态调整实际分发权重。

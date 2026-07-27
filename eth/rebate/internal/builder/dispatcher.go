@@ -9,6 +9,7 @@ import (
 	"math/big"
 	"math/rand"
 	"net/http"
+	"rebate/internal/experiment"
 	"rebate/mylog"
 	"rebate/pkg/types"
 	"sync"
@@ -93,16 +94,22 @@ type Dispatcher struct {
 	log      *DispatchLog
 	rng      *rand.Rand
 	strategy StrategyConfig
+	recorder *experiment.Recorder
 	mu       sync.Mutex // 保护 rng
 }
 
 // NewDispatcher 创建分发器
-func NewDispatcher(registry *Registry, strategy StrategyConfig) *Dispatcher {
+func NewDispatcher(registry *Registry, strategy StrategyConfig, recorders ...*experiment.Recorder) *Dispatcher {
+	var recorder *experiment.Recorder
+	if len(recorders) > 0 {
+		recorder = recorders[0]
+	}
 	return &Dispatcher{
 		registry: registry,
 		log:      newDispatchLog(),
 		rng:      rand.New(rand.NewSource(time.Now().UnixNano())),
 		strategy: normalizeStrategyConfig(strategy),
+		recorder: recorder,
 	}
 }
 
@@ -205,6 +212,31 @@ func (d *Dispatcher) Dispatch(ctx context.Context, bundle *types.SendMevBundleAr
 			Msg("builder dispatch succeeded")
 	}
 
+	if d.recorder != nil {
+		recordErr := d.recorder.RecordBuilderDispatch(experiment.BuilderDispatchEvent{
+			RecordedAt:            time.Now(),
+			BundleHash:            bundleHash.Hex(),
+			TargetBlock:           uint64(bundle.Inclusion.BlockNumber),
+			Builder:               target.Name,
+			Layer:                 decision.Layer,
+			Reason:                decision.Reason,
+			Success:               err == nil,
+			Error:                 rec.Error,
+			ExplorationCandidates: decision.ExplorationCandidates,
+			BuilderBaseScore:      target.BaseScore,
+			BuilderEffectiveScore: target.Score,
+			ExpectedReward:        decision.ExpectedReward,
+			BanditScore:           decision.BanditScore,
+			TotalScore:            d.registry.TotalScore(),
+			BundleProfitWei:       result.Profit.ToInt().String(),
+			BundleRefundableWei:   result.RefundableValue.ToInt().String(),
+			BundleGasUsed:         uint64(result.GasUsed),
+		})
+		if recordErr != nil {
+			mylog.Logger.Warn().Err(recordErr).Msg("Failed to record builder dispatch event")
+		}
+	}
+
 	observation := BuilderObservation{
 		DispatchAttempts: 1,
 	}
@@ -242,6 +274,27 @@ func (d *Dispatcher) Dispatch(ctx context.Context, bundle *types.SendMevBundleAr
 			Float64("average_reward", updatedBuilder.Stats.AverageReward).
 			Float64("last_reward", updatedBuilder.Stats.LastReward).
 			Msg("builder score updated")
+		if d.recorder != nil {
+			recordErr := d.recorder.RecordBuilderSnapshot(experiment.BuilderSnapshotEvent{
+				RecordedAt:        time.Now(),
+				Source:            "dispatch_observation",
+				Builder:           updatedBuilder.Name,
+				BaseScore:         updatedBuilder.BaseScore,
+				EffectiveScore:    updatedBuilder.Score,
+				DispatchAttempts:  updatedBuilder.Stats.DispatchAttempts,
+				DispatchSuccesses: updatedBuilder.Stats.DispatchSuccesses,
+				DispatchFailures:  updatedBuilder.Stats.DispatchFailures,
+				SandwichAttacks:   updatedBuilder.Stats.SandwichAttacks,
+				WellBehavedEvents: updatedBuilder.Stats.WellBehavedEvents,
+				ValuableOrderFlow: updatedBuilder.Stats.ValuableOrderFlow,
+				RewardSamples:     updatedBuilder.Stats.RewardSamples,
+				AverageReward:     updatedBuilder.Stats.AverageReward,
+				LastReward:        updatedBuilder.Stats.LastReward,
+			})
+			if recordErr != nil {
+				mylog.Logger.Warn().Err(recordErr).Msg("Failed to record builder snapshot")
+			}
+		}
 	}
 	d.log.append(rec)
 	return err

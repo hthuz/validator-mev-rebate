@@ -11,6 +11,7 @@ import (
 	"rebate/config"
 	"rebate/internal/builder"
 	"rebate/internal/dataset"
+	"rebate/internal/experiment"
 	"rebate/internal/metrics"
 	"rebate/internal/queue"
 	"rebate/internal/sim"
@@ -53,7 +54,16 @@ func main() {
 		logger.Fatal().Err(err).Msg("Failed to build simulator")
 	}
 	hintBroadcaster := sse.NewHub()
-	metricsStore := metrics.NewMetricsStore()
+	experimentRecorder, err := experiment.NewRecorder(cfg.Reporting.ExperimentDir)
+	if err != nil {
+		logger.Fatal().Err(err).Str("dir", cfg.Reporting.ExperimentDir).Msg("Failed to initialize experiment recorder")
+	}
+	defer func() {
+		if closeErr := experimentRecorder.Close(); closeErr != nil {
+			logger.Error().Err(closeErr).Msg("Failed to close experiment recorder")
+		}
+	}()
+	metricsStore := metrics.NewMetricsStore(experimentRecorder)
 
 	// 4. 从配置创建 Builder Registry
 	registry := builder.NewRegistry()
@@ -70,11 +80,12 @@ func main() {
 		UncertaintyWeight:      cfg.Dispatcher.Exploration.UncertaintyWeight,
 		FreshProducerBonus:     cfg.Dispatcher.Exploration.FreshProducerBonus,
 	}
-	dispatcher := builder.NewDispatcher(registry, strategy)
-	builderHandler := builder.NewHTTPHandler(registry, strategy)
+	dispatcher := builder.NewDispatcher(registry, strategy, experimentRecorder)
+	builderHandler := builder.NewHTTPHandler(registry, strategy, experimentRecorder)
 
 	// 打印已注册的 builder 列表
 	logger.Info().Msg("=== Registered Builders ===")
+	logger.Info().Str("experimentDir", experimentRecorder.BaseDir()).Msg("Experiment recorder initialized")
 	logger.Info().
 		Bool("explorationEnabled", strategy.ExplorationEnabled).
 		Float64("explorationRate", strategy.ExplorationRate).
@@ -110,7 +121,7 @@ func main() {
 	shareAPI := api.NewMevShareAPI(signer, simQueue, store, simulator)
 
 	// 7. 创建模拟工作器
-	worker := sim.NewSimulationWorker(simulator, simQueue, store, hintBroadcaster, signer, metricsStore, dispatcher)
+	worker := sim.NewSimulationWorker(simulator, simQueue, store, hintBroadcaster, signer, metricsStore, dispatcher, experimentRecorder)
 
 	// 8. 创建 HTTP 服务器
 	mux := http.NewServeMux()

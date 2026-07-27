@@ -2,6 +2,8 @@ package metrics
 
 import (
 	"math/big"
+	"rebate/internal/experiment"
+	"rebate/mylog"
 	"rebate/pkg/types"
 	"sync"
 	"time"
@@ -29,10 +31,16 @@ type MetricsStore struct {
 
 	// 当前区块跟踪
 	currentBlock uint64
+
+	recorder *experiment.Recorder
 }
 
 // NewMetricsStore 创建指标存储
-func NewMetricsStore() *MetricsStore {
+func NewMetricsStore(recorders ...*experiment.Recorder) *MetricsStore {
+	var recorder *experiment.Recorder
+	if len(recorders) > 0 {
+		recorder = recorders[0]
+	}
 	return &MetricsStore{
 		blockMetrics:     make(map[uint64]*BlockMevMetrics),
 		validatorMetrics: make(map[common.Address]*ValidatorMetrics),
@@ -43,6 +51,7 @@ func NewMetricsStore() *MetricsStore {
 			StartTime:      time.Now(),
 			UpdatedAt:      time.Now(),
 		},
+		recorder: recorder,
 	}
 }
 
@@ -87,6 +96,38 @@ func (m *MetricsStore) FinalizeBlock(blockNumber uint64, blockGasLimit uint64) {
 	m.globalStats.TotalMevProfit.Add(m.globalStats.TotalMevProfit, metrics.TotalMevProfit)
 	m.globalStats.TotalRefunded.Add(m.globalStats.TotalRefunded, metrics.TotalRefundable)
 	m.globalStats.UpdatedAt = time.Now()
+
+	if m.recorder != nil {
+		successRate := 0.0
+		if metrics.BundleCount > 0 {
+			successRate = float64(metrics.SuccessCount) / float64(metrics.BundleCount)
+		}
+
+		builderDistribution := make(map[string]int, len(metrics.BuilderDistribution))
+		for builder, count := range metrics.BuilderDistribution {
+			builderDistribution[builder] = count
+		}
+
+		if err := m.recorder.RecordBlockSummary(experiment.BlockSummaryEvent{
+			RecordedAt:          time.Now(),
+			BlockNumber:         metrics.BlockNumber,
+			Validator:           metrics.ValidatorAddress.Hex(),
+			BlockTimestamp:      metrics.Timestamp,
+			BundleCount:         metrics.BundleCount,
+			SuccessCount:        metrics.SuccessCount,
+			FailedCount:         metrics.FailedCount,
+			SuccessRate:         successRate,
+			TotalMevProfitWei:   metrics.TotalMevProfit.String(),
+			TotalRefundableWei:  metrics.TotalRefundable.String(),
+			TotalGasUsed:        metrics.TotalGasUsed,
+			MevGasPriceWei:      metrics.MevGasPrice.String(),
+			BlockSpaceUsed:      metrics.BlockSpaceUsed,
+			UniqueBuilders:      len(metrics.BuilderDistribution),
+			BuilderDistribution: builderDistribution,
+		}); err != nil {
+			mylog.Logger.Warn().Err(err).Uint64("blockNumber", metrics.BlockNumber).Msg("Failed to record block summary")
+		}
+	}
 }
 
 // RecordBundleResult 记录 bundle 执行结果
@@ -100,11 +141,11 @@ func (m *MetricsStore) RecordBundleResult(blockNumber uint64, result *types.SimM
 	}
 
 	// 更新搜索者指标
-	m.updateSearcherMetrics(searcher, result, blockNumber)
+	m.updateSearcherMetrics(searcher, result)
 }
 
 // updateSearcherMetrics 更新搜索者指标
-func (m *MetricsStore) updateSearcherMetrics(searcher common.Address, result *types.SimMevBundleResponse, blockNumber uint64) {
+func (m *MetricsStore) updateSearcherMetrics(searcher common.Address, result *types.SimMevBundleResponse) {
 	sm, exists := m.searcherMetrics[searcher]
 	if !exists {
 		sm = &SearcherMetrics{

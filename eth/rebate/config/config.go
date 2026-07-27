@@ -27,6 +27,10 @@ type ExplorationConfig struct {
 	FreshProducerBonus    float64 `mapstructure:"fresh_producer_bonus"`
 }
 
+type ReportingConfig struct {
+	ExperimentDir string `mapstructure:"experiment_dir"`
+}
+
 // DispatcherConfig 分发器配置
 type DispatcherConfig struct {
 	Builders    []BuilderConfig   `mapstructure:"builders"`
@@ -52,6 +56,7 @@ type Config struct {
 	Server       ServerConfig        `mapstructure:"server"`
 	Simulator    SimulatorConfig     `mapstructure:"simulator"`
 	Dispatcher   DispatcherConfig    `mapstructure:"dispatcher"`
+	Reporting    ReportingConfig     `mapstructure:"reporting"`
 	MockBuilders []MockBuilderConfig `mapstructure:"mock_builders"`
 }
 
@@ -102,6 +107,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("dispatcher.exploration.new_producer_age_seconds", 600)
 	v.SetDefault("dispatcher.exploration.uncertainty_weight", 1.25)
 	v.SetDefault("dispatcher.exploration.fresh_producer_bonus", 0.75)
+	v.SetDefault("reporting.experiment_dir", "logs/experiment")
 }
 
 func validate(cfg *Config) error {
@@ -119,6 +125,9 @@ func validate(cfg *Config) error {
 	}
 	if cfg.Simulator.Mode == "replay" && cfg.Simulator.DatasetPath == "" {
 		return fmt.Errorf("simulator.dataset_path is required in replay mode")
+	}
+	if cfg.Reporting.ExperimentDir == "" {
+		return fmt.Errorf("reporting.experiment_dir is required")
 	}
 	for i, b := range cfg.Dispatcher.Builders {
 		if b.Name == "" {

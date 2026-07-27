@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"math/big"
 	"net/http"
+	"rebate/internal/experiment"
 	"rebate/mylog"
 	"time"
 )
@@ -11,6 +12,7 @@ import (
 type HTTPHandler struct {
 	registry *Registry
 	strategy StrategyConfig
+	recorder *experiment.Recorder
 }
 
 type ObserveBuilderRequest struct {
@@ -33,8 +35,12 @@ type BuilderScoreView struct {
 	ExplorationCandidate bool         `json:"explorationCandidate"`
 }
 
-func NewHTTPHandler(registry *Registry, strategy StrategyConfig) *HTTPHandler {
-	return &HTTPHandler{registry: registry, strategy: normalizeStrategyConfig(strategy)}
+func NewHTTPHandler(registry *Registry, strategy StrategyConfig, recorders ...*experiment.Recorder) *HTTPHandler {
+	var recorder *experiment.Recorder
+	if len(recorders) > 0 {
+		recorder = recorders[0]
+	}
+	return &HTTPHandler{registry: registry, strategy: normalizeStrategyConfig(strategy), recorder: recorder}
 }
 
 func (h *HTTPHandler) GetScores(w http.ResponseWriter, r *http.Request) {
@@ -107,6 +113,27 @@ func (h *HTTPHandler) ObserveBuilder(w http.ResponseWriter, r *http.Request) {
 		Float64("last_reward", builder.Stats.LastReward).
 		Float64("effective_score", builder.Score).
 		Msg("builder observation recorded")
+	if h.recorder != nil {
+		recordErr := h.recorder.RecordBuilderSnapshot(experiment.BuilderSnapshotEvent{
+			RecordedAt:        time.Now(),
+			Source:            "manual_observation",
+			Builder:           builder.Name,
+			BaseScore:         builder.BaseScore,
+			EffectiveScore:    builder.Score,
+			DispatchAttempts:  builder.Stats.DispatchAttempts,
+			DispatchSuccesses: builder.Stats.DispatchSuccesses,
+			DispatchFailures:  builder.Stats.DispatchFailures,
+			SandwichAttacks:   builder.Stats.SandwichAttacks,
+			WellBehavedEvents: builder.Stats.WellBehavedEvents,
+			ValuableOrderFlow: builder.Stats.ValuableOrderFlow,
+			RewardSamples:     builder.Stats.RewardSamples,
+			AverageReward:     builder.Stats.AverageReward,
+			LastReward:        builder.Stats.LastReward,
+		})
+		if recordErr != nil {
+			mylog.Logger.Warn().Err(recordErr).Msg("Failed to record manual builder snapshot")
+		}
+	}
 
 	writeJSON(w, http.StatusOK, BuilderScoreView{
 		Name:                 builder.Name,
