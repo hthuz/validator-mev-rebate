@@ -80,6 +80,34 @@ func main() {
 		UncertaintyWeight:      cfg.Dispatcher.Exploration.UncertaintyWeight,
 		FreshProducerBonus:     cfg.Dispatcher.Exploration.FreshProducerBonus,
 	}
+	if err := experimentRecorder.WriteMetadata(map[string]any{
+		"simulator": map[string]any{
+			"mode":                        cfg.Simulator.Mode,
+			"block_interval_seconds":      cfg.Simulator.BlockIntervalSeconds,
+			"block_interval_milliseconds": cfg.Simulator.BlockIntervalMillis,
+			"block_gas_limit":             cfg.Simulator.BlockGasLimit,
+		},
+		"strategy": map[string]any{
+			"exploration_enabled":       strategy.ExplorationEnabled,
+			"exploration_rate":          strategy.ExplorationRate,
+			"min_explore_dispatches":    strategy.MinExploreDispatches,
+			"new_producer_grace_period": strategy.NewProducerGracePeriod.String(),
+			"uncertainty_weight":        strategy.UncertaintyWeight,
+			"fresh_producer_bonus":      strategy.FreshProducerBonus,
+		},
+		"score_model": map[string]any{
+			"min_score":                    0.5,
+			"max_score":                    100.0,
+			"max_score_uplift":             15.0,
+			"increase_rate":                0.01,
+			"decrease_rate":                0.05,
+			"max_competition_penalty":      0.15,
+			"concentration_penalty_rate":   0.35,
+			"relative_reward_penalty_rate": 0.10,
+		},
+	}); err != nil {
+		logger.Warn().Err(err).Msg("Failed to write experiment metadata")
+	}
 	dispatcher := builder.NewDispatcher(registry, strategy, experimentRecorder)
 	builderHandler := builder.NewHTTPHandler(registry, strategy, experimentRecorder)
 
@@ -107,7 +135,6 @@ func main() {
 
 	// 5. 启动 mock builder 节点
 	for _, m := range cfg.MockBuilders {
-		m := m // capture
 		go func() {
 			b := builder.NewMockBuilder(m.Addr)
 			logger.Info().Str("name", m.Name).Str("addr", m.Addr).Msg("Starting mock builder")
@@ -132,6 +159,7 @@ func main() {
 		w.Write([]byte("OK"))
 	})
 	mux.HandleFunc("/builders/scores", builderHandler.GetScores)
+	mux.HandleFunc("/builders/register", builderHandler.RegisterBuilder)
 	mux.HandleFunc("/builders/observe", builderHandler.ObserveBuilder)
 
 	metricsHandler := metrics.NewMetricsHandler(metricsStore)
@@ -153,7 +181,11 @@ func main() {
 	defer cancel()
 
 	worker.Start(ctx)
-	go blockUpdater(ctx, simulator, simQueue, metricsStore, cfg.Simulator.BlockIntervalSeconds)
+	blockInterval := time.Duration(cfg.Simulator.BlockIntervalSeconds) * time.Second
+	if cfg.Simulator.BlockIntervalMillis > 0 {
+		blockInterval = time.Duration(cfg.Simulator.BlockIntervalMillis) * time.Millisecond
+	}
+	go blockUpdater(ctx, simulator, simQueue, metricsStore, blockInterval)
 
 	go func() {
 		logger.Info().Str("addr", server.Addr).Msg("HTTP server listening")
@@ -231,15 +263,14 @@ func buildSimulator(cfg *config.Config) (sim.SimulationBackend, error) {
 }
 
 // blockUpdater 推进当前区块
-func blockUpdater(ctx context.Context, backend sim.SimulationBackend, queue *queue.SimulationQueue, metrics *metrics.MetricsStore, intervalSeconds int) {
+func blockUpdater(ctx context.Context, backend sim.SimulationBackend, queue *queue.SimulationQueue, metrics *metrics.MetricsStore, blockInterval time.Duration) {
 	advancer, ok := backend.(sim.BlockAdvancer)
 	if !ok {
 		logger.Warn().Msg("Simulator does not support block advancement")
 		return
 	}
 
-	tickDuration := time.Duration(intervalSeconds) * time.Second
-	ticker := time.NewTicker(tickDuration)
+	ticker := time.NewTicker(blockInterval)
 	defer ticker.Stop()
 
 	validators := []string{

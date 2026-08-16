@@ -17,12 +17,19 @@ type HTTPHandler struct {
 
 type ObserveBuilderRequest struct {
 	Builder           string   `json:"builder"`
+	BlockNumber       uint64   `json:"blockNumber,omitempty"`
 	DispatchAttempts  uint64   `json:"dispatchAttempts,omitempty"`
 	DispatchSuccesses uint64   `json:"dispatchSuccesses,omitempty"`
 	SandwichAttacks   uint64   `json:"sandwichAttacks,omitempty"`
 	WellBehavedEvents uint64   `json:"wellBehavedEvents,omitempty"`
 	ValueCreatedWei   string   `json:"valueCreatedWei,omitempty"`
 	Reward            *float64 `json:"reward,omitempty"`
+}
+
+type RegisterBuilderRequest struct {
+	Name  string  `json:"name"`
+	URL   string  `json:"url"`
+	Score float64 `json:"score"`
 }
 
 type BuilderScoreView struct {
@@ -61,6 +68,43 @@ func (h *HTTPHandler) GetScores(w http.ResponseWriter, r *http.Request) {
 		"builders":   views,
 		"totalScore": h.registry.TotalScore(),
 	})
+}
+
+func (h *HTTPHandler) RegisterBuilder(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req RegisterBuilderRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json body", http.StatusBadRequest)
+		return
+	}
+	if req.Name == "" || req.URL == "" {
+		http.Error(w, "name and url are required", http.StatusBadRequest)
+		return
+	}
+	if err := h.registry.Register(req.Name, req.URL, req.Score); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	for _, builder := range h.registry.All() {
+		if builder.Name == req.Name {
+			writeJSON(w, http.StatusOK, BuilderScoreView{
+				Name:                 builder.Name,
+				URL:                  builder.URL,
+				BaseScore:            builder.BaseScore,
+				Score:                builder.Score,
+				Stats:                builder.Stats,
+				RegisteredAt:         builder.RegisteredAt.Format(time.RFC3339),
+				ExplorationCandidate: h.isExplorationCandidate(builder),
+			})
+			return
+		}
+	}
+	http.Error(w, "builder registration failed", http.StatusInternalServerError)
 }
 
 func (h *HTTPHandler) ObserveBuilder(w http.ResponseWriter, r *http.Request) {
@@ -116,6 +160,7 @@ func (h *HTTPHandler) ObserveBuilder(w http.ResponseWriter, r *http.Request) {
 	if h.recorder != nil {
 		recordErr := h.recorder.RecordBuilderSnapshot(experiment.BuilderSnapshotEvent{
 			RecordedAt:        time.Now(),
+			BlockNumber:       req.BlockNumber,
 			Source:            "manual_observation",
 			Builder:           builder.Name,
 			BaseScore:         builder.BaseScore,

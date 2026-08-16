@@ -87,6 +87,57 @@ func TestBuildRecordIncludesExpectedFields(t *testing.T) {
 	}
 }
 
+func TestBuildRecordHandlesUnprotectedLegacyTx(t *testing.T) {
+	privateKey, err := crypto.HexToECDSA("4c0883a6910395b2c7f59f63a2fce9e87f32be8f8b18d76e0c7ab6b5234f6b31")
+	if err != nil {
+		t.Fatalf("HexToECDSA: %v", err)
+	}
+
+	to := common.HexToAddress("0x2222222222222222222222222222222222222222")
+	tx := etypes.NewTx(&etypes.LegacyTx{
+		Nonce:    3,
+		GasPrice: big.NewInt(20_000_000_000),
+		Gas:      21000,
+		To:       &to,
+		Value:    big.NewInt(42),
+	})
+
+	signedTx, err := etypes.SignTx(tx, etypes.HomesteadSigner{}, privateKey)
+	if err != nil {
+		t.Fatalf("SignTx: %v", err)
+	}
+
+	header := &etypes.Header{
+		Number:  big.NewInt(20_000_001),
+		Time:    1_717_171_718,
+		BaseFee: big.NewInt(12_000_000_000),
+	}
+	block := etypes.NewBlockWithHeader(header).WithBody(etypes.Body{
+		Transactions: []*etypes.Transaction{signedTx},
+	})
+	receipt := &etypes.Receipt{
+		Status:            etypes.ReceiptStatusSuccessful,
+		CumulativeGasUsed: 21000,
+		GasUsed:           21000,
+		BlockNumber:       header.Number,
+		BlockHash:         block.Hash(),
+		TxHash:            signedTx.Hash(),
+		EffectiveGasPrice: big.NewInt(20_000_000_000),
+	}
+
+	record, err := buildRecord(block, 0, signedTx, receipt)
+	if err != nil {
+		t.Fatalf("buildRecord: %v", err)
+	}
+
+	if got := record[7]; got == "" {
+		t.Fatal("expected sender address to be populated for unprotected legacy tx")
+	}
+	if got := record[17]; got != "0" {
+		t.Fatalf("unexpected chain id: %s", got)
+	}
+}
+
 func TestMethodID(t *testing.T) {
 	if got := methodID(nil); got != "" {
 		t.Fatalf("expected empty method id, got %s", got)

@@ -10,8 +10,14 @@ import (
 )
 
 const (
-	minEffectiveScore         = 0.05
-	maxEffectiveScoreBoost    = 3.0
+	minEffectiveScore         = 0.5
+	maxEffectiveScore         = 100.0
+	maxScoreUplift            = 15.0
+	scoreIncreaseRate         = 0.01
+	scoreDecreaseRate         = 0.05
+	maxCompetitionPenalty     = 0.15
+	concentrationPenaltyRate  = 0.35
+	relativeRewardPenaltyRate = 0.10
 	sandwichPenaltyPerEvent   = 0.20
 	wellBehavedBonusPerEvent  = 0.05
 	consecutiveFailurePenalty = 0.12
@@ -78,10 +84,13 @@ func NewRegistry() *Registry {
 	return &Registry{}
 }
 
-// Register 注册一个 builder。score 必须 > 0
+// Register 注册一个 builder。score 必须在 (0, 100] 范围内。
 func (r *Registry) Register(name, url string, score float64) error {
 	if score <= 0 {
 		return fmt.Errorf("builder %q: score must be > 0, got %f", name, score)
+	}
+	if score > maxEffectiveScore {
+		return fmt.Errorf("builder %q: score must be <= %.0f, got %f", name, maxEffectiveScore, score)
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -110,6 +119,9 @@ func (r *Registry) Register(name, url string, score float64) error {
 func (r *Registry) UpdateScore(name string, score float64) error {
 	if score <= 0 {
 		return fmt.Errorf("score must be > 0")
+	}
+	if score > maxEffectiveScore {
+		return fmt.Errorf("score must be <= %.0f", maxEffectiveScore)
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -165,7 +177,7 @@ func (r *Registry) Observe(name string, observation BuilderObservation) (*Builde
 		b.Stats.AverageReward = b.Stats.TotalReward / float64(b.Stats.RewardSamples)
 		b.Stats.LastReward = reward
 		b.Stats.LastUpdatedAt = time.Now()
-		b.Score = computeEffectiveScore(b)
+		r.recalculateScoresLocked()
 		return cloneBuilderInfo(b), nil
 	}
 
@@ -196,6 +208,26 @@ func (r *Registry) TotalScore() float64 {
 	return total
 }
 
+func (r *Registry) recalculateScoresLocked() {
+	if len(r.builders) == 0 {
+		return
+	}
+
+	totalAttempts := uint64(0)
+	maxAverageReward := 0.0
+	for _, b := range r.builders {
+		totalAttempts += b.Stats.DispatchAttempts
+		if b.Stats.AverageReward > maxAverageReward {
+			maxAverageReward = b.Stats.AverageReward
+		}
+	}
+	for _, b := range r.builders {
+		b.Score = computeEffectiveScoreWithCompetition(
+			b, totalAttempts, len(r.builders), maxAverageReward,
+		)
+	}
+}
+
 func cloneBuilderInfo(in *BuilderInfo) *BuilderInfo {
 	if in == nil {
 		return nil
@@ -211,6 +243,15 @@ func cloneBuilderInfo(in *BuilderInfo) *BuilderInfo {
 }
 
 func computeEffectiveScore(builder *BuilderInfo) float64 {
+	return computeEffectiveScoreWithCompetition(builder, 0, 1, 0)
+}
+
+func computeEffectiveScoreWithCompetition(
+	builder *BuilderInfo,
+	totalAttempts uint64,
+	builderCount int,
+	maxAverageReward float64,
+) float64 {
 	base := builder.BaseScore
 	if base <= 0 {
 		base = 1
@@ -227,8 +268,49 @@ func computeEffectiveScore(builder *BuilderInfo) float64 {
 	wellBehavedFactor := clamp(1.0+wellBehavedBonusPerEvent*float64(builder.Stats.WellBehavedEvents), 1.0, 1.5)
 	valueFactor := 1.0 + clamp(valueReward(builder.totalValueWei), 0, maxValueReward)
 
-	score := base * reliabilityFactor * failureFactor * sandwichFactor * wellBehavedFactor * valueFactor
-	return clamp(score, minEffectiveScore, base*maxEffectiveScoreBoost)
+	targetScore := base * reliabilityFactor * failureFactor * sandwichFactor * wellBehavedFactor * valueFactor
+	targetScore = clamp(targetScore, minEffectiveScore, maxEffectiveScore)
+	targetScore = math.Min(targetScore, base+maxScoreUplift)
+	targetScore *= competitionFactor(builder, totalAttempts, builderCount, maxAverageReward)
+
+	currentScore := builder.Score
+	if currentScore <= 0 {
+		currentScore = clamp(base, minEffectiveScore, maxEffectiveScore)
+	}
+	rate := scoreIncreaseRate
+	if targetScore < currentScore {
+		rate = scoreDecreaseRate
+	}
+	return clamp(currentScore+(targetScore-currentScore)*rate, minEffectiveScore, maxEffectiveScore)
+}
+
+func competitionFactor(
+	builder *BuilderInfo,
+	totalAttempts uint64,
+	builderCount int,
+	maxAverageReward float64,
+) float64 {
+	if builderCount <= 1 || totalAttempts == 0 {
+		return 1.0
+	}
+
+	expectedShare := 1.0 / float64(builderCount)
+	actualShare := float64(builder.Stats.DispatchAttempts) / float64(totalAttempts)
+	concentrationPenalty := 0.0
+	if actualShare > expectedShare {
+		concentrationPenalty = (actualShare - expectedShare) * concentrationPenaltyRate
+	}
+
+	relativeRewardPenalty := 0.0
+	if maxAverageReward > 0 && builder.Stats.AverageReward < maxAverageReward {
+		relativeRewardPenalty = (1.0 - clamp(builder.Stats.AverageReward/maxAverageReward, 0, 1)) * relativeRewardPenaltyRate
+	}
+
+	return 1.0 - clamp(
+		concentrationPenalty+relativeRewardPenalty,
+		0,
+		maxCompetitionPenalty,
+	)
 }
 
 func computeReward(observation BuilderObservation) float64 {

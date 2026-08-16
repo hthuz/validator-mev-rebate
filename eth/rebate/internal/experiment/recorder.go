@@ -17,6 +17,7 @@ const (
 	builderDispatchFile = "builder_dispatches.jsonl"
 	builderSnapshotFile = "builder_snapshots.jsonl"
 	blockSummaryFile    = "block_summary.jsonl"
+	metadataFile        = "metadata.json"
 )
 
 type BundleSimulationEvent struct {
@@ -68,6 +69,7 @@ type BuilderDispatchEvent struct {
 
 type BuilderSnapshotEvent struct {
 	RecordedAt        time.Time `json:"recorded_at"`
+	BlockNumber       uint64    `json:"block_number,omitempty"`
 	Source            string    `json:"source"`
 	Builder           string    `json:"builder"`
 	BaseScore         float64   `json:"base_score"`
@@ -133,6 +135,25 @@ func (r *Recorder) BaseDir() string {
 		return ""
 	}
 	return r.baseDir
+}
+
+func (r *Recorder) WriteMetadata(value any) error {
+	if r == nil {
+		return nil
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	data, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode metadata: %w", err)
+	}
+	data = append(data, '\n')
+	if err := os.WriteFile(filepath.Join(r.baseDir, metadataFile), data, 0o644); err != nil {
+		return fmt.Errorf("write metadata: %w", err)
+	}
+	return nil
 }
 
 func (r *Recorder) Close() error {

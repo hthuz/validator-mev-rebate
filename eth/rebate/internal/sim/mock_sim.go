@@ -2,7 +2,9 @@ package sim
 
 import (
 	"context"
+	"fmt"
 	"math/big"
+	"math/rand"
 	"rebate/mylog"
 	"rebate/pkg/types"
 	"rebate/pkg/utils"
@@ -11,6 +13,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/crypto"
 )
 
 // ============== Mock 模拟器 (用于 demo) ==============
@@ -19,6 +22,8 @@ import (
 type MockSimulator struct {
 	currentBlock uint64
 	mu           sync.RWMutex
+	random       *rand.Rand
+	blockTxCount map[uint64]uint64
 }
 
 const mockBlockGasLimit = 30000000
@@ -27,6 +32,8 @@ const mockBlockGasLimit = 30000000
 func NewMockSimulator() *MockSimulator {
 	return &MockSimulator{
 		currentBlock: 1000000, // 初始块号
+		random:       rand.New(rand.NewSource(time.Now().UnixNano())),
+		blockTxCount: make(map[uint64]uint64),
 	}
 }
 
@@ -39,13 +46,15 @@ func (m *MockSimulator) SimulateBundle(ctx context.Context, bundle *types.SendMe
 	// 模拟一些处理延迟
 	time.Sleep(50 * time.Millisecond)
 
-	// 计算模拟结果
-	gasUsed := uint64(21000 * len(bundle.Body)) // 基础 gas
-	profit := big.NewInt(int64(gasUsed * 100))  // 模拟利润
-	mevGasPrice := big.NewInt(1000000000)       // 1 Gwei
+	historicalTxCount, insertionIndex, baseFee := m.blockContext(currentBlock)
+	gasUsed := uint64(21000 * len(bundle.Body))
+	profit := new(big.Int).Mul(big.NewInt(int64(gasUsed)), baseFee)
+	profit.Div(profit, big.NewInt(100))
+	mevGasPrice := big.NewInt(1000000000) // 1 Gwei
 
 	// 生成模拟日志
 	bodyLogs := m.generateMockLogs(bundle.Body)
+	blockHash := common.BytesToHash(crypto.Keccak256([]byte(fmt.Sprintf("mock-block-%d", currentBlock))))
 
 	response := &types.SimMevBundleResponse{
 		Success:         true,
@@ -55,6 +64,14 @@ func (m *MockSimulator) SimulateBundle(ctx context.Context, bundle *types.SendMe
 		RefundableValue: hexutil.Big(*big.NewInt(profit.Int64() / 10)),
 		GasUsed:         hexutil.Uint64(gasUsed),
 		BodyLogs:        bodyLogs,
+		Block: &types.SimulatedBlockContext{
+			BlockNumber:          hexutil.Uint64(currentBlock),
+			BlockHash:            blockHash,
+			BlockTimestamp:       hexutil.Uint64(time.Now().Unix()),
+			BaseFee:              hexutil.Big(*baseFee),
+			HistoricalTxCount:    hexutil.Uint64(historicalTxCount),
+			BundleInsertionIndex: hexutil.Uint64(insertionIndex),
+		},
 	}
 
 	mylog.Logger.Debug().
@@ -64,6 +81,28 @@ func (m *MockSimulator) SimulateBundle(ctx context.Context, bundle *types.SendMe
 		Msg("Bundle simulated")
 
 	return response, nil
+}
+
+func (m *MockSimulator) blockContext(block uint64) (uint64, uint64, *big.Int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	count, ok := m.blockTxCount[block]
+	if !ok {
+		if m.random.Intn(20) == 0 {
+			count = uint64(1000 + m.random.Intn(4001))
+		} else {
+			count = uint64(100 + m.random.Intn(401))
+		}
+		m.blockTxCount[block] = count
+	}
+
+	insertionIndex := uint64(0)
+	if count > 0 {
+		insertionIndex = uint64(m.random.Intn(int(count)))
+	}
+	baseFee := big.NewInt(int64(10_000_000_000 + m.random.Intn(90_000_000_001)))
+	return count, insertionIndex, baseFee
 }
 
 // generateMockLogs 生成模拟日志

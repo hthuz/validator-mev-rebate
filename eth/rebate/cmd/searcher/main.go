@@ -22,11 +22,18 @@ func main() {
 	serverURL := flag.String("server", "http://localhost:8080", "rebate server url")
 	datasetPath := flag.String("dataset", "data/ethereum_transactions.csv", "path to collected Ethereum transaction dataset")
 	maxChainDepth := flag.Int("max-chain-depth", 2, "maximum bundle depth to backrun")
+	mock := flag.Bool("mock", false, "generate random mock transactions instead of loading a dataset")
 	flag.Parse()
 
-	builder, err := client.NewReplayBundleBuilder(*datasetPath)
-	if err != nil {
-		logger.Fatal().Err(err).Str("dataset", *datasetPath).Msg("failed to load replay dataset")
+	var builder *client.ReplayBundleBuilder
+	if *mock {
+		builder = client.NewMockBundleBuilder()
+	} else {
+		var err error
+		builder, err = client.NewReplayBundleBuilder(*datasetPath)
+		if err != nil {
+			logger.Fatal().Err(err).Str("dataset", *datasetPath).Msg("failed to load replay dataset")
+		}
 	}
 
 	subscribeHints(*streamURL, *serverURL, builder, *maxChainDepth)

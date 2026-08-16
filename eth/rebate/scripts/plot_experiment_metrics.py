@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 from collections import Counter, defaultdict
+from datetime import datetime
 from pathlib import Path
 from typing import Iterable
 
@@ -44,6 +45,21 @@ def rolling_success_rate(flags: Iterable[bool], window: int = 20) -> list[float]
         chunk = values[start : idx + 1]
         result.append(sum(1 for item in chunk if item) / len(chunk))
     return result
+
+
+def parse_timestamp(value: str) -> datetime:
+    value = value.replace("Z", "+00:00")
+    if "." not in value:
+        return datetime.fromisoformat(value)
+    prefix, suffix = value.split(".", 1)
+    timezone_index = max(suffix.find("+"), suffix.find("-"))
+    if timezone_index < 0:
+        fraction, timezone = suffix, ""
+    else:
+        fraction, timezone = suffix[:timezone_index], suffix[timezone_index:]
+    return datetime.fromisoformat(
+        f"{prefix}.{fraction[:6].ljust(6, '0')}{timezone}"
+    )
 
 
 def plot_block_profit(blocks: list[dict], output_dir: Path) -> None:
@@ -119,21 +135,62 @@ def plot_dispatch_layers(dispatches: list[dict], output_dir: Path) -> None:
     plt.close()
 
 
-def plot_builder_scores(snapshots: list[dict], output_dir: Path) -> None:
+def snapshot_block_number(snapshot: dict, dispatches: list[dict]) -> int:
+    block_number = int(snapshot.get("block_number", 0) or 0)
+    if block_number:
+        return block_number
+
+    # Older logs did not persist block_number. Associate them with the nearest
+    # dispatch event so historical reports can use the same block-number axis.
+    recorded_at = snapshot.get("recorded_at")
+    if not recorded_at or not dispatches:
+        return 0
+    timestamp = parse_timestamp(recorded_at)
+    nearest = min(
+        dispatches,
+        key=lambda item: abs(
+            parse_timestamp(item["recorded_at"]) - timestamp
+        ),
+    )
+    return int(nearest.get("target_block", 0) or 0)
+
+
+def plot_builder_scores(
+    snapshots: list[dict], dispatches: list[dict], output_dir: Path
+) -> None:
     if not snapshots:
         return
     by_builder: dict[str, list[dict]] = defaultdict(list)
     for item in snapshots:
-        by_builder[item["builder"]].append(item)
+        block_number = snapshot_block_number(item, dispatches)
+        if block_number:
+            by_builder[item["builder"]].append(
+                {**item, "_block_number": block_number}
+            )
+    first_block = min(
+        (item["_block_number"] for rows in by_builder.values() for item in rows),
+        default=0,
+    )
+    last_block = max(
+        (int(item.get("target_block", 0) or 0) for item in dispatches), default=0
+    )
 
     plt.figure(figsize=(10, 5))
     for builder, rows in sorted(by_builder.items()):
-        rows.sort(key=lambda item: item["recorded_at"])
-        x = list(range(1, len(rows) + 1))
+        rows.sort(key=lambda item: (item["_block_number"], item["recorded_at"]))
+        # Keep the latest snapshot for a builder within the same block.
+        latest_by_block = {
+            item["_block_number"]: item for item in rows
+        }
+        rows = [latest_by_block[block] for block in sorted(latest_by_block)]
+        if last_block and rows[-1]["_block_number"] < last_block:
+            rows.append({**rows[-1], "_block_number": last_block})
+        x = [item["_block_number"] - first_block for item in rows]
         y = [item.get("effective_score", 0.0) for item in rows]
-        plt.plot(x, y, marker="o", label=builder)
+        plt.plot(x, y, linewidth=1.8, label=builder)
 
-    plt.xlabel("Observation index")
+    plt.xticks(range(0, 10001, 2000))
+    plt.xlabel("Blocks since experiment start")
     plt.ylabel("Effective score")
     plt.title("Builder Score Trend")
     plt.grid(alpha=0.3)
@@ -181,6 +238,29 @@ def plot_builder_dispatch_mix(dispatches: list[dict], output_dir: Path) -> None:
     plt.close(fig)
 
 
+def plot_builder_block_counts(dispatches: list[dict], output_dir: Path) -> None:
+    if not dispatches:
+        return
+
+    blocks_by_builder: dict[str, set[int]] = defaultdict(set)
+    for item in dispatches:
+        target_block = int(item.get("target_block", 0) or 0)
+        if target_block:
+            blocks_by_builder[item["builder"]].add(target_block)
+
+    builders = sorted(blocks_by_builder)
+    counts = [len(blocks_by_builder[builder]) for builder in builders]
+    plt.figure(figsize=(10, 5))
+    plt.bar(builders, counts, color="#17becf", alpha=0.8)
+    plt.xlabel("Builder")
+    plt.ylabel("Unique target blocks")
+    plt.title("Unique Target Blocks per Builder")
+    plt.grid(axis="y", alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(output_dir / "builder_block_counts.png", dpi=180)
+    plt.close()
+
+
 def plot_bundle_outcomes(bundles: list[dict], output_dir: Path) -> None:
     if not bundles:
         return
@@ -214,6 +294,34 @@ def plot_bundle_outcomes(bundles: list[dict], output_dir: Path) -> None:
 def write_summary(
     blocks: list[dict], dispatches: list[dict], snapshots: list[dict], bundles: list[dict], output_dir: Path
 ) -> None:
+    metadata_path = output_dir.parent / "metadata.json"
+    metadata = {}
+    if metadata_path.exists():
+        with metadata_path.open("r", encoding="utf-8") as handle:
+            metadata = json.load(handle)
+
+    builder_blocks: dict[str, set[int]] = defaultdict(set)
+    builder_dispatches: Counter[str] = Counter()
+    builder_successes: Counter[str] = Counter()
+    for item in dispatches:
+        builder = item.get("builder", "unknown")
+        builder_dispatches[builder] += 1
+        if item.get("success"):
+            builder_successes[builder] += 1
+        target_block = int(item.get("target_block", 0) or 0)
+        if target_block:
+            builder_blocks[builder].add(target_block)
+
+    builder_block_counts = [
+        {
+            "builder": builder,
+            "total_distributed_bundles": builder_dispatches[builder],
+            "successful_distributed_bundles": builder_successes[builder],
+            "total_built_blocks": len(builder_blocks[builder]),
+        }
+        for builder in sorted(builder_dispatches)
+    ]
+
     summary = {
         "total_blocks": len(blocks),
         "total_bundle_events": len(bundles),
@@ -233,6 +341,8 @@ def write_summary(
         "total_mev_profit_eth": round(
             sum(wei_to_eth(item.get("total_mev_profit_wei")) for item in blocks), 6
         ),
+        "builder_block_counts": builder_block_counts,
+        "experiment_metadata": metadata,
     }
     with (output_dir / "summary.json").open("w", encoding="utf-8") as handle:
         json.dump(summary, handle, ensure_ascii=False, indent=2)
@@ -270,8 +380,9 @@ def main() -> None:
     plot_block_profit(blocks, output_dir)
     plot_block_success(blocks, output_dir)
     plot_dispatch_layers(dispatches, output_dir)
-    plot_builder_scores(snapshots, output_dir)
+    plot_builder_scores(snapshots, dispatches, output_dir)
     plot_builder_dispatch_mix(dispatches, output_dir)
+    plot_builder_block_counts(dispatches, output_dir)
     plot_bundle_outcomes(bundles, output_dir)
     write_summary(blocks, dispatches, snapshots, bundles, output_dir)
 

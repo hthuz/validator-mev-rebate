@@ -47,13 +47,26 @@ func GetTransactionSender(txBytes []byte) (common.Address, error) {
 		return common.Address{}, err
 	}
 
-	signer := etypes.LatestSignerForChainID(tx.ChainId())
-	sender, err := etypes.Sender(signer, tx)
-	if err != nil {
-		return common.Address{}, err
+	return RecoverTransactionSender(tx)
+}
+
+// RecoverTransactionSender recovers the sender for both protected and
+// unprotected legacy Ethereum transactions.
+func RecoverTransactionSender(tx *etypes.Transaction) (common.Address, error) {
+	if tx == nil {
+		return common.Address{}, fmt.Errorf("transaction is nil")
 	}
 
-	return sender, nil
+	chainID := tx.ChainId()
+	if chainID != nil && chainID.Sign() > 0 {
+		return etypes.Sender(etypes.LatestSignerForChainID(chainID), tx)
+	}
+
+	if tx.Type() == etypes.LegacyTxType {
+		return etypes.Sender(etypes.HomesteadSigner{}, tx)
+	}
+
+	return common.Address{}, fmt.Errorf("missing chain ID for tx type %d", tx.Type())
 }
 
 func DecodeTransaction(txBytes []byte) (*etypes.Transaction, error) {

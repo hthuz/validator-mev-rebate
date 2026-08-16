@@ -17,15 +17,22 @@ func main() {
 	serverURL := flag.String("server", "http://localhost:8080", "rebate server url")
 	datasetPath := flag.String("dataset", "data/ethereum_transactions.csv", "path to collected Ethereum transaction dataset")
 	interval := flag.Duration("interval", 2*time.Second, "bundle send interval")
+	mock := flag.Bool("mock", false, "generate random mock transactions instead of loading a dataset")
 	flag.Parse()
 
-	SendMultipleTx(*serverURL, *datasetPath, *interval)
+	SendMultipleTx(*serverURL, *datasetPath, *interval, *mock)
 }
 
-func SendMultipleTx(serverURL, datasetPath string, interval time.Duration) {
-	builder, err := client.NewReplayBundleBuilder(datasetPath)
-	if err != nil {
-		logger.Fatal().Err(err).Str("dataset", datasetPath).Msg("failed to load replay dataset")
+func SendMultipleTx(serverURL, datasetPath string, interval time.Duration, mock bool) {
+	var builder *client.ReplayBundleBuilder
+	if mock {
+		builder = client.NewMockBundleBuilder()
+	} else {
+		var err error
+		builder, err = client.NewReplayBundleBuilder(datasetPath)
+		if err != nil {
+			logger.Fatal().Err(err).Str("dataset", datasetPath).Msg("failed to load replay dataset")
+		}
 	}
 
 	for {

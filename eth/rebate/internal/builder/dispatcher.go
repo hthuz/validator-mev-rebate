@@ -277,6 +277,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, bundle *types.SendMevBundleAr
 		if d.recorder != nil {
 			recordErr := d.recorder.RecordBuilderSnapshot(experiment.BuilderSnapshotEvent{
 				RecordedAt:        time.Now(),
+				BlockNumber:       uint64(bundle.Inclusion.BlockNumber),
 				Source:            "dispatch_observation",
 				Builder:           updatedBuilder.Name,
 				BaseScore:         updatedBuilder.BaseScore,

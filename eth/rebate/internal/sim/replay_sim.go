@@ -222,7 +222,7 @@ func flattenBundleTransactions(body []types.MevBundleBody, baseFee *big.Int) ([]
 				if err != nil {
 					return fmt.Errorf("decode bundle tx: %w", err)
 				}
-				from, err := etypes.Sender(etypes.LatestSignerForChainID(tx.ChainId()), tx)
+				from, err := utils.RecoverTransactionSender(tx)
 				if err != nil {
 					return fmt.Errorf("recover sender for tx %s: %w", tx.Hash().Hex(), err)
 				}

@@ -11,7 +11,7 @@ reporting:
   experiment_dir: logs/experiment
 
 # 注册到分发器的 builder 节点
-# score 是基础分。运行时会基于分发成功率、价值产出、well-behaved 事件、
+# score 是 0-100 的百分制基础分。运行时会基于分发成功率、价值产出、well-behaved 事件、
 # sandwich 攻击报告等行为信号，动态调整实际分发权重。
 dispatcher:
   exploration:
@@ -24,10 +24,10 @@ dispatcher:
   builders:
     - name: builder-alpha
       url: http://localhost:18545
-      score: 3.0
+      score: 100
     - name: builder-beta
       url: http://localhost:18546
-      score: 1.0
+      score: 33
 
 # 本地启动的 mock builder 节点（仅用于开发/测试）
 mock_builders:

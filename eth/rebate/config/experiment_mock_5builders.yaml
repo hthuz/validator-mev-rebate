@@ -1,0 +1,55 @@
+server:
+  port: 8080
+
+simulator:
+  mode: mock
+  block_interval_seconds: 1
+  block_interval_milliseconds: 10
+  block_gas_limit: 30000000
+
+reporting:
+  experiment_dir: logs/experiment_mock_5builders
+
+dispatcher:
+  exploration:
+    enabled: true
+    rate: 0.20
+    min_explore_dispatches: 5
+    new_producer_age_seconds: 600
+    uncertainty_weight: 1.25
+    fresh_producer_bonus: 0.75
+  builders:
+    - name: builder-alpha
+      url: http://localhost:18545
+      score: 85
+    - name: builder-beta
+      url: http://localhost:18546
+      score: 67
+    - name: builder-gamma
+      url: http://localhost:18547
+      score: 50
+    - name: builder-delta
+      url: http://localhost:18548
+      score: 27
+    - name: builder-epsilon
+      url: http://localhost:18549
+      score: 13
+    - name: builder-theta
+      url: http://localhost:18551
+      score: 85
+
+mock_builders:
+  - name: builder-alpha
+    addr: :18545
+  - name: builder-beta
+    addr: :18546
+  - name: builder-gamma
+    addr: :18547
+  - name: builder-delta
+    addr: :18548
+  - name: builder-epsilon
+    addr: :18549
+  - name: builder-zeta
+    addr: :18550
+  - name: builder-theta
+    addr: :18551

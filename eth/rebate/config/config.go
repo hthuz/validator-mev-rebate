@@ -42,6 +42,7 @@ type SimulatorConfig struct {
 	Mode                 string `mapstructure:"mode"`
 	DatasetPath          string `mapstructure:"dataset_path"`
 	BlockIntervalSeconds int    `mapstructure:"block_interval_seconds"`
+	BlockIntervalMillis  int    `mapstructure:"block_interval_milliseconds"`
 	BlockGasLimit        uint64 `mapstructure:"block_gas_limit"`
 }
 
@@ -100,6 +101,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("simulator.mode", "replay")
 	v.SetDefault("simulator.dataset_path", "data/ethereum_transactions.csv")
 	v.SetDefault("simulator.block_interval_seconds", 2)
+	v.SetDefault("simulator.block_interval_milliseconds", 0)
 	v.SetDefault("simulator.block_gas_limit", 30000000)
 	v.SetDefault("dispatcher.exploration.enabled", true)
 	v.SetDefault("dispatcher.exploration.rate", 0.20)
@@ -120,6 +122,9 @@ func validate(cfg *Config) error {
 	if cfg.Simulator.BlockIntervalSeconds <= 0 {
 		return fmt.Errorf("simulator.block_interval_seconds must be > 0")
 	}
+	if cfg.Simulator.BlockIntervalMillis < 0 {
+		return fmt.Errorf("simulator.block_interval_milliseconds must be >= 0")
+	}
 	if cfg.Simulator.BlockGasLimit == 0 {
 		return fmt.Errorf("simulator.block_gas_limit must be > 0")
 	}
@@ -136,8 +141,8 @@ func validate(cfg *Config) error {
 		if b.URL == "" {
 			return fmt.Errorf("dispatcher.builders[%d] %q: url is required", i, b.Name)
 		}
-		if b.Score <= 0 {
-			return fmt.Errorf("dispatcher.builders[%d] %q: score must be > 0", i, b.Name)
+		if b.Score <= 0 || b.Score > 100 {
+			return fmt.Errorf("dispatcher.builders[%d] %q: score must be in (0, 100]", i, b.Name)
 		}
 	}
 	if cfg.Dispatcher.Exploration.Rate < 0 || cfg.Dispatcher.Exploration.Rate > 1 {
