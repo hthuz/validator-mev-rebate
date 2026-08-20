@@ -3,7 +3,7 @@ package metrics
 import (
 	"math/big"
 	"rebate/internal/experiment"
-	"rebate/mylog"
+	"rebate/internal/logging"
 	"rebate/pkg/types"
 	"sync"
 	"time"
@@ -125,7 +125,7 @@ func (m *MetricsStore) FinalizeBlock(blockNumber uint64, blockGasLimit uint64) {
 			UniqueBuilders:      len(metrics.BuilderDistribution),
 			BuilderDistribution: builderDistribution,
 		}); err != nil {
-			mylog.Logger.Warn().Err(err).Uint64("blockNumber", metrics.BlockNumber).Msg("Failed to record block summary")
+			logging.Logger.Warn().Err(err).Uint64("blockNumber", metrics.BlockNumber).Msg("Failed to record block summary")
 		}
 	}
 }

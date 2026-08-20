@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"sync"
 
-	"rebate/mylog"
+	"rebate/internal/logging"
 	"rebate/pkg/types"
 )
 
@@ -28,13 +28,13 @@ func (h *Hub) Subscribe() (<-chan []byte, func()) {
 	h.clients[ch] = struct{}{}
 	h.mu.Unlock()
 
-	mylog.Logger.Debug().Int("total", h.clientCount()).Msg("SSE client subscribed")
+	logging.Logger.Debug().Int("total", h.clientCount()).Msg("SSE client subscribed")
 
 	cancel := func() {
 		h.mu.Lock()
 		delete(h.clients, ch)
 		h.mu.Unlock()
-		mylog.Logger.Debug().Int("total", h.clientCount()).Msg("SSE client unsubscribed")
+		logging.Logger.Debug().Int("total", h.clientCount()).Msg("SSE client unsubscribed")
 	}
 
 	return ch, cancel
@@ -55,11 +55,11 @@ func (h *Hub) Broadcast(hint *types.Hint) error {
 		case ch <- data:
 		default:
 			// 慢速客户端直接跳过，不阻塞广播
-			mylog.Logger.Warn().Msg("SSE client too slow, dropping hint")
+			logging.Logger.Warn().Msg("SSE client too slow, dropping hint")
 		}
 	}
 
-	mylog.Logger.Info().
+	logging.Logger.Info().
 		Str("matchingHash", hint.Hash.Hex()).
 		Int("subscribers", len(h.clients)).
 		Msg("Hint broadcasted via SSE")

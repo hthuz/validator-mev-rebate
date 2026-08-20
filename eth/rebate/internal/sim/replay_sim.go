@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"math/big"
 	"rebate/internal/dataset"
-	"rebate/mylog"
+	"rebate/internal/logging"
 	"rebate/pkg/types"
 	"rebate/pkg/utils"
 	"sort"
@@ -164,7 +164,7 @@ func (r *ReplaySimulator) SimulateBundle(ctx context.Context, bundle *types.Send
 		Block:           blockInfo,
 	}
 
-	mylog.Logger.Info().
+	logging.Logger.Info().
 		Uint64("stateBlock", r.CurrentBlock()).
 		Uint64("targetBlock", targetBlock.Number).
 		Int("bundleTxs", len(bundleTxs)).

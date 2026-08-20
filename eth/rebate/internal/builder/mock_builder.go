@@ -3,7 +3,7 @@ package builder
 import (
 	"encoding/json"
 	"net/http"
-	"rebate/mylog"
+	"rebate/internal/logging"
 	"rebate/pkg/types"
 )
 
@@ -27,7 +27,7 @@ func (b *MockBuilder) Start() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", b.handleRPC)
 
-	mylog.Logger.Info().Str("addr", b.addr).Msg("MockBuilder listening")
+	logging.Logger.Info().Str("addr", b.addr).Msg("MockBuilder listening")
 	return http.ListenAndServe(b.addr, mux)
 }
 
@@ -54,11 +54,11 @@ func (b *MockBuilder) handleRPC(w http.ResponseWriter, r *http.Request) {
 }
 
 func (b *MockBuilder) handleSendMevBundle(w http.ResponseWriter, req types.JSONRPCRequest) {
-	mylog.Logger.Info().
+	logging.Logger.Info().
 		Interface("id", req.ID).
 		RawJSON("params", req.Params).
 		Msg("MockBuilder received eth_sendMevBundle")
-	mylog.BuilderLogger.Info().
+	logging.BuilderLogger.Info().
 		Str("event", "mock_builder_received_bundle").
 		Str("builder_addr", b.addr).
 		Interface("id", req.ID).
@@ -69,11 +69,11 @@ func (b *MockBuilder) handleSendMevBundle(w http.ResponseWriter, req types.JSONR
 }
 
 func (b *MockBuilder) handleSendRawTransaction(w http.ResponseWriter, req types.JSONRPCRequest) {
-	mylog.Logger.Info().
+	logging.Logger.Info().
 		Interface("id", req.ID).
 		RawJSON("params", req.Params).
 		Msg("MockBuilder received eth_sendRawTransaction")
-	mylog.BuilderLogger.Info().
+	logging.BuilderLogger.Info().
 		Str("event", "mock_builder_received_raw_tx").
 		Str("builder_addr", b.addr).
 		Interface("id", req.ID).

@@ -2,7 +2,7 @@ package queue
 
 import (
 	"context"
-	"rebate/mylog"
+	"rebate/internal/logging"
 	"rebate/pkg/types"
 	"sync"
 	"time"
@@ -59,7 +59,7 @@ func (q *SimulationQueue) Push(bundle *types.SendMevBundleArgs, priority bool) {
 	// 唤醒等待的 worker
 	q.cond.Signal()
 
-	mylog.Logger.Info().
+	logging.Logger.Info().
 		Str("bundleHash", bundle.Metadata.BundleHash.Hex()).
 		Uint64("targetBlock", item.TargetBlock).
 		Bool("priority", priority).
@@ -134,7 +134,7 @@ func (q *SimulationQueue) cleanExpired() {
 		if maxBlock >= q.currentBlock {
 			newItems = append(newItems, item)
 		} else {
-			mylog.Logger.Debug().
+			logging.Logger.Debug().
 				Str("bundleHash", item.Bundle.Metadata.BundleHash.Hex()).
 				Uint64("maxBlock", maxBlock).
 				Uint64("currentBlock", q.currentBlock).
@@ -166,7 +166,7 @@ func (q *SimulationQueue) Requeue(item *BundleQueueItem) {
 
 	item.Retries++
 	if item.Retries > 5 {
-		mylog.Logger.Warn().
+		logging.Logger.Warn().
 			Str("bundleHash", item.Bundle.Metadata.BundleHash.Hex()).
 			Int("retries", item.Retries).
 			Msg("Bundle exceeded max retries, dropping")

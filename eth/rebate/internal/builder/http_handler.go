@@ -5,7 +5,7 @@ import (
 	"math/big"
 	"net/http"
 	"rebate/internal/experiment"
-	"rebate/mylog"
+	"rebate/internal/logging"
 	"time"
 )
 
@@ -145,7 +145,7 @@ func (h *HTTPHandler) ObserveBuilder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	mylog.BuilderLogger.Info().
+	logging.BuilderLogger.Info().
 		Str("event", "builder_observation_recorded").
 		Str("builder", builder.Name).
 		Uint64("dispatch_attempts", req.DispatchAttempts).
@@ -176,7 +176,7 @@ func (h *HTTPHandler) ObserveBuilder(w http.ResponseWriter, r *http.Request) {
 			LastReward:        builder.Stats.LastReward,
 		})
 		if recordErr != nil {
-			mylog.Logger.Warn().Err(recordErr).Msg("Failed to record manual builder snapshot")
+			logging.Logger.Warn().Err(recordErr).Msg("Failed to record manual builder snapshot")
 		}
 	}
 

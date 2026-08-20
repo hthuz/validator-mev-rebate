@@ -26,7 +26,7 @@
    模拟成功后的 bundle 会进入 builder dispatcher，按信誉、reward 和 exploration / exploitation 策略做 block producer 路由。
 
 5. 观测层  
-   系统提供 block / validator / searcher / builder 多维指标接口，同时将 builder 相关行为单独写入 `builder_report.log`。
+   系统提供 block / validator / searcher / builder 多维指标接口，运行日志统一写入 `logs/rebate.log`，实验指标写入配置指定的 `logs/experiment*` 目录。
 
 ## 3. 核心技术实现
 
@@ -183,4 +183,3 @@ Simulation worker 的流程是：
 
 5. 增强可视化与报告系统  
    把 block、searcher、builder、reward、exploration / exploitation 分布统一做成面板，便于实验评估和对外汇报。
-

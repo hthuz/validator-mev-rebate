@@ -9,14 +9,14 @@ import (
 	"net/http"
 	"rebate/api"
 	"rebate/internal/client"
-	"rebate/mylog"
+	"rebate/internal/logging"
 	"rebate/pkg/types"
 	"strconv"
 	"strings"
 	"time"
 )
 
-var logger = mylog.Logger
+var logger = logging.Logger
 
 func main() {
 	serverURL := flag.String("server", "http://localhost:8080", "rebate server url")

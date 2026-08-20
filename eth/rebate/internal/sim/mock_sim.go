@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"math/big"
 	"math/rand"
-	"rebate/mylog"
+	"rebate/internal/logging"
 	"rebate/pkg/types"
 	"rebate/pkg/utils"
 	"sync"
@@ -74,7 +74,7 @@ func (m *MockSimulator) SimulateBundle(ctx context.Context, bundle *types.SendMe
 		},
 	}
 
-	mylog.Logger.Debug().
+	logging.Logger.Debug().
 		Str("bundleHash", bundle.Metadata.BundleHash.Hex()).
 		Uint64("stateBlock", currentBlock).
 		Uint64("gasUsed", gasUsed).

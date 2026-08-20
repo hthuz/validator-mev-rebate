@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"rebate/internal/logging"
 )
 
 const defaultDir = "logs/experiment"
@@ -111,14 +113,16 @@ type Recorder struct {
 
 func DefaultDir() string {
 	if dir := strings.TrimSpace(os.Getenv("EXPERIMENT_REPORT_DIR")); dir != "" {
-		return dir
+		return logging.ResolveLogPath(dir)
 	}
-	return defaultDir
+	return logging.ResolveLogPath(defaultDir)
 }
 
 func NewRecorder(baseDir string) (*Recorder, error) {
 	if strings.TrimSpace(baseDir) == "" {
 		baseDir = DefaultDir()
+	} else {
+		baseDir = logging.ResolveLogPath(baseDir)
 	}
 	if err := os.MkdirAll(baseDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create experiment dir: %w", err)

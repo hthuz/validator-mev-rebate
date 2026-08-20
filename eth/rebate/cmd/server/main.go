@@ -12,11 +12,11 @@ import (
 	"rebate/internal/builder"
 	"rebate/internal/dataset"
 	"rebate/internal/experiment"
+	"rebate/internal/logging"
 	"rebate/internal/metrics"
 	"rebate/internal/queue"
 	"rebate/internal/sim"
 	"rebate/internal/sse"
-	"rebate/mylog"
 	"rebate/pkg/utils"
 	"syscall"
 	"time"
@@ -24,7 +24,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
-var logger = mylog.Logger
+var logger = logging.Logger
 
 func main() {
 	configPath := flag.String("config", "", "path to config file (default: config/config.yaml)")

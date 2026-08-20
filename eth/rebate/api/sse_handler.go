@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"net/http"
 
+	"rebate/internal/logging"
 	"rebate/internal/sse"
-	"rebate/mylog"
 )
 
 // NewSSEHandler 返回一个 HTTP handler，searcher 通过 GET /events 订阅 hint 推流
@@ -32,7 +32,7 @@ func NewSSEHandler(hub *sse.Hub) http.HandlerFunc {
 		ch, cancel := hub.Subscribe()
 		defer cancel()
 
-		mylog.Logger.Info().
+		logging.Logger.Info().
 			Str("remote", r.RemoteAddr).
 			Msg("SSE searcher connected")
 
@@ -43,7 +43,7 @@ func NewSSEHandler(hub *sse.Hub) http.HandlerFunc {
 		for {
 			select {
 			case <-r.Context().Done():
-				mylog.Logger.Info().
+				logging.Logger.Info().
 					Str("remote", r.RemoteAddr).
 					Msg("SSE searcher disconnected")
 				return

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math/big"
-	"rebate/mylog"
+	"rebate/internal/logging"
 	"rebate/pkg/utils"
 	"strconv"
 	"strings"
@@ -86,7 +86,7 @@ func (c *Collector) WriteCSV(ctx context.Context, startBlock, endBlock uint64, w
 			return fmt.Errorf("flush csv writer for block %d: %w", blockNumber, err)
 		}
 		totalTxs += len(rows)
-		mylog.Logger.Info().Uint64("block", blockNumber).Int("txs", len(rows)).
+		logging.Logger.Info().Uint64("block", blockNumber).Int("txs", len(rows)).
 			Int("totalTxs", totalTxs).Msg("Collected Ethereum block")
 	}
 	return nil

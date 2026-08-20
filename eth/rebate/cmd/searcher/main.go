@@ -10,11 +10,11 @@ import (
 	"strings"
 	"sync"
 
-	"rebate/mylog"
+	"rebate/internal/logging"
 	"rebate/pkg/types"
 )
 
-var logger = mylog.Logger
+var logger = logging.Logger
 var seenMatchingHashes sync.Map
 
 func main() {

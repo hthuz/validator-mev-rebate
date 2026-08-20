@@ -5,9 +5,9 @@ import (
 	"crypto/ecdsa"
 	"errors"
 	"fmt"
+	"rebate/internal/logging"
 	"rebate/internal/queue"
 	"rebate/internal/sim"
-	"rebate/mylog"
 	"rebate/pkg/types"
 	"rebate/pkg/utils"
 	"sync"
@@ -18,7 +18,7 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 )
 
-var logger = mylog.Logger
+var logger = logging.Logger
 
 // ============== API 常量 ==============
 
@@ -69,7 +69,7 @@ func NewMevShareAPI(
 
 // SendBundle 提交 MEV Bundle
 func (api *MevShareAPI) SendBundle(ctx context.Context, args types.SendMevBundleArgs) (*types.SendMevBundleResponse, error) {
-	mylog.Logger.Info().
+	logging.Logger.Info().
 		Str("version", args.Version).
 		Uint64("block", uint64(args.Inclusion.BlockNumber)).
 		Uint64("maxBlock", uint64(args.Inclusion.MaxBlock)).
@@ -82,13 +82,13 @@ func (api *MevShareAPI) SendBundle(ctx context.Context, args types.SendMevBundle
 	// 2. 验证 Bundle
 	bundleHash, hasUnmatchedHash, err := utils.ValidateBundle(&args, currentBlock, api.signer)
 	if err != nil {
-		mylog.Logger.Warn().Err(err).Msg("Bundle validation failed")
+		logging.Logger.Warn().Err(err).Msg("Bundle validation failed")
 		return nil, fmt.Errorf("validation failed: %w", err)
 	}
 
 	// 3. 检查是否已处理过
 	if _, exists := api.knownBundles.LoadOrStore(bundleHash, time.Now()); exists {
-		mylog.Logger.Debug().
+		logging.Logger.Debug().
 			Str("bundleHash", bundleHash.Hex()).
 			Msg("Bundle already known, skipping")
 		return &types.SendMevBundleResponse{BundleHash: bundleHash}, nil
@@ -103,7 +103,7 @@ func (api *MevShareAPI) SendBundle(ctx context.Context, args types.SendMevBundle
 	// 5. 处理 Backrun (如果有未匹配的 Hash 引用)
 	if hasUnmatchedHash {
 		if err := api.handleBackrun(ctx, &args); err != nil {
-			mylog.Logger.Warn().Err(err).Msg("Failed to handle backrun")
+			logging.Logger.Warn().Err(err).Msg("Failed to handle backrun")
 			// 不阻止提交, 可能稍后匹配
 		}
 	}
@@ -115,7 +115,7 @@ func (api *MevShareAPI) SendBundle(ctx context.Context, args types.SendMevBundle
 	priority := false // 可以根据来源或其他条件设置优先级
 	api.queue.Push(&args, priority)
 
-	mylog.Logger.Info().
+	logging.Logger.Info().
 		Str("bundleHash", bundleHash.Hex()).
 		Bool("hasBackrun", hasUnmatchedHash).
 		Msg("Bundle accepted")
@@ -159,7 +159,7 @@ func (api *MevShareAPI) handleBackrun(ctx context.Context, bundle *types.SendMev
 	bundle.Metadata.BundleHash = utils.CalculateBundleHash(bodyHashes)
 	bundle.Metadata.BodyHashes = bodyHashes
 
-	mylog.Logger.Info().
+	logging.Logger.Info().
 		Str("bundleHash", bundle.Metadata.BundleHash.Hex()).
 		Str("matchingHash", matchingHash.Hex()).
 		Msg("Backrun matched")
@@ -176,7 +176,7 @@ func (api *MevShareAPI) SimBundle(ctx context.Context, args types.SendMevBundleA
 		return nil, ErrRateLimited
 	}
 
-	mylog.Logger.Info().
+	logging.Logger.Info().
 		Str("version", args.Version).
 		Int("bodyLen", len(args.Body)).
 		Msg("Received SimBundle request")

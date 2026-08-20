@@ -10,7 +10,7 @@ import (
 	"math/rand"
 	"net/http"
 	"rebate/internal/experiment"
-	"rebate/mylog"
+	"rebate/internal/logging"
 	"rebate/pkg/types"
 	"sync"
 	"time"
@@ -151,7 +151,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, bundle *types.SendMevBundleAr
 	target, decision := d.selectTarget(candidates, time.Now())
 	bundleHash := bundle.Metadata.BundleHash
 
-	mylog.Logger.Info().
+	logging.Logger.Info().
 		Str("bundleHash", bundleHash.Hex()).
 		Str("builder", target.Name).
 		Str("layer", decision.Layer).
@@ -163,7 +163,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, bundle *types.SendMevBundleAr
 		Float64("banditScore", decision.BanditScore).
 		Float64("totalScore", d.registry.TotalScore()).
 		Msg("Dispatching bundle to builder")
-	mylog.BuilderLogger.Info().
+	logging.BuilderLogger.Info().
 		Str("event", "builder_dispatch_selected").
 		Str("bundle_hash", bundleHash.Hex()).
 		Str("builder", target.Name).
@@ -189,12 +189,12 @@ func (d *Dispatcher) Dispatch(ctx context.Context, bundle *types.SendMevBundleAr
 	}
 	if err != nil {
 		rec.Error = err.Error()
-		mylog.Logger.Warn().
+		logging.Logger.Warn().
 			Err(err).
 			Str("bundleHash", bundleHash.Hex()).
 			Str("builder", target.Name).
 			Msg("Bundle dispatch failed")
-		mylog.BuilderLogger.Warn().
+		logging.BuilderLogger.Warn().
 			Str("event", "builder_dispatch_result").
 			Str("bundle_hash", bundleHash.Hex()).
 			Str("builder", target.Name).
@@ -203,11 +203,11 @@ func (d *Dispatcher) Dispatch(ctx context.Context, bundle *types.SendMevBundleAr
 			Str("error", err.Error()).
 			Msg("builder dispatch failed")
 	} else {
-		mylog.Logger.Info().
+		logging.Logger.Info().
 			Str("bundleHash", bundleHash.Hex()).
 			Str("builder", target.Name).
 			Msg("Bundle dispatched successfully")
-		mylog.BuilderLogger.Info().
+		logging.BuilderLogger.Info().
 			Str("event", "builder_dispatch_result").
 			Str("bundle_hash", bundleHash.Hex()).
 			Str("builder", target.Name).
@@ -237,7 +237,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, bundle *types.SendMevBundleAr
 			BundleGasUsed:         uint64(result.GasUsed),
 		})
 		if recordErr != nil {
-			mylog.Logger.Warn().Err(recordErr).Msg("Failed to record builder dispatch event")
+			logging.Logger.Warn().Err(recordErr).Msg("Failed to record builder dispatch event")
 		}
 	}
 
@@ -252,9 +252,9 @@ func (d *Dispatcher) Dispatch(ctx context.Context, bundle *types.SendMevBundleAr
 	}
 	updatedBuilder, observeErr := d.registry.Observe(target.Name, observation)
 	if observeErr != nil {
-		mylog.Logger.Warn().Err(observeErr).Str("builder", target.Name).Msg("Failed to update builder dynamic score")
+		logging.Logger.Warn().Err(observeErr).Str("builder", target.Name).Msg("Failed to update builder dynamic score")
 	} else {
-		mylog.Logger.Info().
+		logging.Logger.Info().
 			Str("builder", updatedBuilder.Name).
 			Float64("baseScore", updatedBuilder.BaseScore).
 			Float64("effectiveScore", updatedBuilder.Score).
@@ -263,7 +263,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, bundle *types.SendMevBundleAr
 			Uint64("sandwichAttacks", updatedBuilder.Stats.SandwichAttacks).
 			Uint64("wellBehavedEvents", updatedBuilder.Stats.WellBehavedEvents).
 			Msg("Builder score updated")
-		mylog.BuilderLogger.Info().
+		logging.BuilderLogger.Info().
 			Str("event", "builder_score_updated").
 			Str("builder", updatedBuilder.Name).
 			Float64("base_score", updatedBuilder.BaseScore).
@@ -297,7 +297,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, bundle *types.SendMevBundleAr
 				LastReward:        updatedBuilder.Stats.LastReward,
 			})
 			if recordErr != nil {
-				mylog.Logger.Warn().Err(recordErr).Msg("Failed to record builder snapshot")
+				logging.Logger.Warn().Err(recordErr).Msg("Failed to record builder snapshot")
 			}
 		}
 	}
