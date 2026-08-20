@@ -9,6 +9,7 @@ import (
 	"math/big"
 	"math/rand"
 	"net/http"
+	"rebate/config"
 	"rebate/internal/experiment"
 	"rebate/internal/logging"
 	"rebate/pkg/types"
@@ -23,15 +24,7 @@ const (
 	dispatchLayerExploitation = "exploitation"
 )
 
-type StrategyConfig struct {
-	ExplorationEnabled     bool
-	ExplorationMode        string
-	ExplorationRate        float64
-	MinExploreDispatches   uint64
-	NewProducerGracePeriod time.Duration
-	UncertaintyWeight      float64
-	FreshProducerBonus     float64
-}
+type StrategyConfig = config.StrategyConfig
 
 type DispatchDecision struct {
 	Layer                 string

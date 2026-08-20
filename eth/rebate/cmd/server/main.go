@@ -73,15 +73,7 @@ func main() {
 			logger.Fatal().Err(err).Str("builder", b.Name).Msg("Failed to register builder")
 		}
 	}
-	strategy := builder.StrategyConfig{
-		ExplorationEnabled:     cfg.Dispatcher.Exploration.Enabled,
-		ExplorationMode:        cfg.Dispatcher.Exploration.Mode,
-		ExplorationRate:        cfg.Dispatcher.Exploration.Rate,
-		MinExploreDispatches:   cfg.Dispatcher.Exploration.MinExploreDispatches,
-		NewProducerGracePeriod: time.Duration(cfg.Dispatcher.Exploration.NewProducerAgeSeconds) * time.Second,
-		UncertaintyWeight:      cfg.Dispatcher.Exploration.UncertaintyWeight,
-		FreshProducerBonus:     cfg.Dispatcher.Exploration.FreshProducerBonus,
-	}
+	strategy := cfg.Dispatcher.Strategy
 	if err := experimentRecorder.WriteMetadata(map[string]any{
 		"simulator": map[string]any{
 			"mode":                        cfg.Simulator.Mode,

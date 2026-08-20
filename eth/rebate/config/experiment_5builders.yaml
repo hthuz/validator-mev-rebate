@@ -11,11 +11,11 @@ reporting:
   experiment_dir: logs/experiment_5builders
 
 dispatcher:
-  exploration:
-    enabled: true
-    rate: 0.20
+  strategy:
+    exploration_enabled: true
+    exploration_rate: 0.20
     min_explore_dispatches: 5
-    new_producer_age_seconds: 600
+    new_producer_grace_period: 600s
     uncertainty_weight: 1.25
     fresh_producer_bonus: 0.75
   builders:
