@@ -95,50 +95,325 @@ Simulation worker 的流程是：
 
 ### 3.5 Builder / Block Producer 动态评分机制
 
-系统没有采用“固定 score + 固定路由”的静态 builder 选择方式，而是维护了一套动态行为画像。每个 builder 都会记录：
+系统没有采用“固定 score + 固定路由”的静态 builder 选择方式，而是维护了一套动态行为画像。配置文件中的 `score` 只作为 `BaseScore`，表示 builder 初始信誉；系统实际用于调度的是运行时动态更新的 `Score`，也称 `effective_score`。二者关系是：
+
+- `BaseScore`：人工配置或注册时给定的初始信誉分，不会被普通观测直接改写；
+- `Score`：根据行为观测、收益反馈和竞争约束计算得到的动态信誉分，直接影响后续分发权重；
+- `Reward`：bandit 层使用的收益学习信号，记录在 `AverageReward` / `LastReward` 中，用于修正 `expectedReward`。
+
+每个 builder 会持续累计以下行为画像：
 
 - 分发尝试次数
 - 分发成功 / 失败次数
 - sandwich attack 次数
 - well-behaved 事件次数
 - valuable order flow 次数
+- 连续失败次数
 - 累计 reward、平均 reward、最近 reward
 
-在此基础上，系统会计算两个层次的量：
+#### Score 更新输入
 
-1. `Score`  
-   作为信誉分，反映 builder 的长期行为质量。成功率高、价值高、well-behaved 多的 builder 会升分；sandwich 攻击多、连续失败多的 builder 会降分。
+每次成功模拟后的 bundle 会进入 dispatcher。dispatcher 向目标 builder 发送 bundle 后，会自动写入一次观测：
 
-2. `Reward`  
-   作为 bandit 学习信号，反映最近的收益质量。reward 默认由成功、失败、价值、well-behaved、sandwich 等行为自动组合计算，也允许通过 API 显式注入。
+- `DispatchAttempts = 1`
+- 若发送成功，则 `DispatchSuccesses = 1`
+- 若模拟结果产生正的 `profit + refundable_value`，则作为 `ValueCreatedWei`
+
+实验脚本或外部系统也可以通过 `/builders/observe` 注入批量观测，例如成功率、sandwich attack、well-behaved 事件、显式 reward 等。这些观测会统一进入同一套 score 更新逻辑。
+
+#### Reward 计算
+
+如果观测中显式给出 `Reward`，系统直接使用该值，并截断到：
+
+```text
+Reward ∈ [-2.0, 2.0]
+```
+
+如果没有显式给出 reward，则由行为指标自动计算：
+
+```text
+success_rate = dispatch_successes / dispatch_attempts
+failure_rate = (dispatch_attempts - dispatch_successes) / dispatch_attempts
+value_component = clamp(log10(1 + value_created_eth) * 0.20, 0, 0.75)
+well_behaved_component = clamp(well_behaved_events * 0.05, 0, 0.50)
+sandwich_penalty = sandwich_attacks * 1.10
+
+reward =
+    1.00 * success_rate
+  + 0.60 * value_component
+  + 0.15 * well_behaved_component
+  - 0.70 * failure_rate
+  - sandwich_penalty
+
+reward = clamp(reward, -2.0, 2.0)
+```
+
+其中价值项采用对数函数，避免单次高额订单流把 reward 拉得过高：
+
+```text
+value_reward = log10(1 + value_created_eth) * 0.20
+```
+
+每次观测后，系统更新：
+
+```text
+RewardSamples += 1
+TotalReward += reward
+AverageReward = TotalReward / RewardSamples
+LastReward = reward
+```
+
+#### Effective Score 计算
+
+动态信誉分不是直接跳到目标值，而是先计算一个 `targetScore`，再按不同步长平滑更新。
+
+基础指标：
+
+```text
+success_rate = dispatch_successes / dispatch_attempts
+reliability_factor = clamp(0.5 + success_rate, 0.35, 1.50)
+failure_factor = clamp(1.0 - 0.12 * consecutive_failures, 0.40, 1.0)
+sandwich_factor = clamp(1.0 - 0.20 * sandwich_attacks, 0.10, 1.0)
+well_behaved_factor = clamp(1.0 + 0.05 * well_behaved_events, 1.0, 1.5)
+value_factor = 1.0 + clamp(value_reward(total_value_created_wei), 0, 0.75)
+```
+
+目标分：
+
+```text
+targetScore =
+    BaseScore
+  * reliability_factor
+  * failure_factor
+  * sandwich_factor
+  * well_behaved_factor
+  * value_factor
+
+targetScore = clamp(targetScore, 0.5, 100.0)
+targetScore = min(targetScore, BaseScore + 15.0)
+targetScore = targetScore * competition_factor
+```
+
+其中：
+
+- 正常成功行为通过 `reliability_factor` 缓慢抬升信誉；
+- 连续失败通过 `failure_factor` 处罚，单次全失败会累积 `ConsecutiveFailures`；
+- sandwich attack 通过 `sandwich_factor` 快速扣分，每个事件按 `0.20` 线性惩罚，最低压到 `0.10`；
+- well-behaved 事件最高提供 `1.5x` 正向因子；
+- 价值产出最高提供 `0.75` 的额外因子；
+- 单个 builder 的正向涨分最多不能超过 `BaseScore + 15`，避免短期高收益导致信誉失控；
+- 全局有效分数范围为 `[0.5, 100]`。
+
+#### Competition Factor
+
+为避免订单流长期集中到单一 builder，score 还会乘以竞争惩罚：
+
+```text
+expected_share = 1 / builder_count
+actual_share = builder_dispatch_attempts / total_dispatch_attempts
+
+concentration_penalty =
+    max(actual_share - expected_share, 0) * 0.35
+
+relative_reward_penalty =
+    if max_average_reward > 0 and builder_average_reward < max_average_reward:
+        (1 - clamp(builder_average_reward / max_average_reward, 0, 1)) * 0.10
+    else:
+        0
+
+competition_factor =
+    1 - clamp(concentration_penalty + relative_reward_penalty, 0, 0.15)
+```
+
+也就是说，如果某个 builder 获得的流量份额明显高于均分预期，或者相对其他 builder 的平均 reward 偏低，它的动态 score 会被额外下调，最大下调幅度为 `15%`。
+
+#### 平滑更新步长
+
+最终 `Score` 不会直接替换为 `targetScore`，而是按方向使用不同更新速率：
+
+```text
+if targetScore >= currentScore:
+    rate = 0.01
+else:
+    rate = 0.05
+
+newScore = currentScore + (targetScore - currentScore) * rate
+newScore = clamp(newScore, 0.5, 100.0)
+```
+
+这体现了系统的非对称更新原则：
+
+- 好行为缓慢加分，单次正反馈只推进约 `1%`；
+- 坏行为快速降分，负反馈按约 `5%` 步长靠近目标低分；
+- 因此恶意行为会比正常收益更快反映到调度权重中。
 
 ### 3.6 Exploration / Exploitation 分层分发
 
 系统在 builder / block producer 路由时，不再只按固定权重做 exploitation，而是加入了 exploration 层，用于解决新加入 producer 的冷启动问题和订单流中心化问题。
 
+一次 dispatch 的目标 producer 选择流程如下：
+
+1. 从 registry 取出所有 builder；
+2. 如果 bundle 的 privacy 字段指定了 builder 白名单，则先按白名单过滤；
+3. 如果过滤后为空，则回退到全部已注册 builder；
+4. 若只有一个候选 builder，则直接选择该 builder；
+5. 若有多个候选 builder，则先计算 exploration candidates；
+6. 根据 exploration 配置选择进入 exploration 层或 exploitation 层；
+7. 在选定层内使用加权随机抽样选择最终 target producer。
+
+当前 `experiment_mock_5builders.yaml` 中的核心参数为：
+
+```yaml
+dispatcher:
+  strategy:
+    exploration_enabled: true
+    exploration_mode: alternating
+    exploration_rate: 0.20
+    min_explore_dispatches: 1000
+    new_producer_grace_period: 600s
+    uncertainty_weight: 1.25
+    fresh_producer_bonus: 0.75
+```
+
+其中 `exploration_mode` 支持两种模式：
+
+- `alternating`：在存在 exploration candidate 时，exploration / exploitation 交替执行；
+- `probabilistic`：每次按 `exploration_rate` 概率进入 exploration，否则进入 exploitation。
+
 #### Exploration 层
 
 以下 producer 会被视为 exploration candidate：
 
-- dispatch 样本数仍不足；
-- 注册时间较近，仍处于 grace period。
+- `DispatchAttempts < min_explore_dispatches`；
+- 或者注册时间距离当前时间小于 `new_producer_grace_period`。
 
-在 exploration 命中时，系统不会直接按 `Score` 选路，而是基于以下量计算探索权重：
+在当前实验配置中，任一 builder 只要累计 dispatch 样本数少于 `1000`，或者注册后仍处在 `600s` grace period 内，就会进入 exploration candidate 集合。
 
-- `expectedReward`
-- 样本不足带来的 uncertainty 加权
-- 新 producer bonus
-- UCB bonus
+Exploration 层不是直接选择 UCB 分数最大的 builder，而是先计算每个候选 builder 的 bandit score，再按 bandit score 做加权随机抽样。这样可以避免单个候选因短期高分完全垄断 exploration 流量。
 
-即：探索时更偏向“高潜力但不确定”的 producer。
+基础预期收益：
+
+```text
+reward_mean = clamp(AverageReward, -2.0, 2.0)
+reward_multiplier = max(1 + reward_mean, 0.10)
+expectedReward = max(Score, 0.5) * reward_multiplier
+```
+
+探索基础权重：
+
+```text
+explorationWeight = max(expectedReward, 0.5)
+```
+
+如果样本数不足，则加入缺样本加权：
+
+```text
+missing = min_explore_dispatches - DispatchAttempts
+sample_bonus_multiplier =
+    1 + uncertainty_weight * (missing / min_explore_dispatches)
+
+explorationWeight *= sample_bonus_multiplier
+```
+
+如果 builder 仍处在新 producer grace period，则加入冷启动 bonus：
+
+```text
+freshness = 1 - age / new_producer_grace_period
+fresh_bonus_multiplier = 1 + fresh_producer_bonus * freshness
+
+explorationWeight *= fresh_bonus_multiplier
+```
+
+随后加入与 dispatch 次数相关的不确定性权重：
+
+```text
+explorationWeight *= 1 + uncertainty_weight / sqrt(DispatchAttempts + 1)
+```
+
+最后计算 UCB-style bonus：
+
+```text
+totalPulls = sum(all_builder.DispatchAttempts) + 1
+ucbBonus =
+    uncertainty_weight
+  * sqrt( ln(totalPulls + 1) / (RewardSamples + 1) )
+```
+
+最终 bandit score：
+
+```text
+banditScore = explorationWeight + ucbBonus
+```
+
+这里的 `banditScore` 不是单独持久化的状态字段，也没有额外的“bandit score 更新表”。它是在每次 dispatch 选择 target producer 时，基于当时最新的 `Score`、`AverageReward`、`DispatchAttempts`、`RewardSamples` 和注册时间实时计算出来的。真正被持久累计的是 builder 的行为统计和 reward 统计；这些统计变化后，下一次计算出的 bandit score 会自然变化。
+
+因此，探索阶段实际偏向三类 producer：
+
+- 信誉和收益已经表现较好的 producer；
+- 样本数不足、仍有较高不确定性的 producer；
+- 新注册且还处于 grace period 的 producer。
+
+但由于最终仍是加权随机抽样，低分 producer 只要仍在候选集中，也保留一定探索概率。
 
 #### Exploitation 层
 
-当未命中 exploration，或者不存在 under-explored producer 时，系统进入 exploitation 层。此时分发依据不再只是静态权重，而是：
+系统进入 exploitation 层的情况包括：
 
-`expectedReward = reputation_score * reward_multiplier`
+- `exploration_enabled = false`；
+- 当前不存在 exploration candidate；
+- `exploration_mode = alternating` 且本轮轮到 exploitation；
+- `exploration_mode = probabilistic` 且随机数未命中 `exploration_rate`。
 
-也就是把长期信誉分和近期 reward 学习结果结合起来，尽量把更多订单流分给当前更有预期收益的 producer。
+Exploitation 层使用 `expectedReward` 作为权重：
+
+```text
+expectedReward = max(Score, 0.5) * max(1 + clamp(AverageReward, -2.0, 2.0), 0.10)
+```
+
+其中：
+
+- `Score` 表示长期信誉和风险控制结果；
+- `AverageReward` 表示历史收益反馈；
+- `reward_multiplier` 最低为 `0.10`，避免某个 builder 因短期负 reward 被完全打成零概率；
+- 最终权重也会再通过 `minEffectiveScore = 0.5` 做下限保护。
+
+#### Target Producer 加权抽样
+
+无论 exploration 还是 exploitation，最终 target producer 都不是简单取最大值，而是加权随机选择。
+
+对候选集合中的每个 builder 计算：
+
+```text
+weight_i = max(scoreFn(builder_i), 0.5)
+totalWeight = sum(weight_i)
+```
+
+其中：
+
+- exploration 层：`scoreFn = banditScore`
+- exploitation 层：`scoreFn = expectedReward`
+
+随后生成：
+
+```text
+pick = random(0, 1) * totalWeight
+```
+
+按候选列表顺序累加权重，选中第一个满足：
+
+```text
+cumulativeWeight > pick
+```
+
+的 builder 作为 target producer。
+
+因此，某个 builder 被选中的近似概率为：
+
+```text
+P(builder_i) = weight_i / totalWeight
+```
+
+这种设计让高信誉、高 reward、低风险的 builder 获得更高流量份额，但不会让其他候选 builder 的概率直接归零，配合 exploration 层和 competition factor，可以持续保留发现新 producer、惩罚作恶 producer、抑制流量过度集中的能力。
 
 ## 4. 主要创新点
 
