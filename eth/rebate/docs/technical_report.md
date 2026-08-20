@@ -11,28 +11,97 @@
 
 ## 2. 整体架构
 
-系统由五个核心层组成：
+系统由五个核心层组成。当前代码同时支持 replay 实验和 mock 压测实验：replay 模式依赖真实交易 CSV，mock 模式直接生成可控的区块和 bundle 流量，用于长周期 builder score / bandit 策略验证。
 
 1. 数据集层  
-   从真实 Ethereum 公共节点采集交易，保存为 CSV，并在运行时加载为 replay dataset。
+   从真实 Ethereum 公共节点采集交易，保存为 CSV，并在 replay 模式运行时加载为 replay dataset。mock 模式不依赖 CSV，而是由 `MockSimulator` 生成区块上下文和模拟结果。
 
 2. 交互层  
-   `user` 基于数据集构造真实 bundle，`searcher` 基于 hint 构造 backrun bundle，统一通过 JSON-RPC 发给 `server`。
+   `user` 可以基于数据集构造真实 bundle，也可以在 mock 模式下持续生成测试 bundle；`searcher` 基于 hint 构造 backrun bundle，统一通过 JSON-RPC 发给 `server`。
 
 3. 模拟层  
-   `server` 内部的 replay simulator 根据目标区块的真实历史交易和 bundle 交易做重排、冲突检测与插入模拟。
+   `server` 根据配置选择 replay simulator 或 mock simulator。replay simulator 根据目标区块的真实历史交易和 bundle 交易做重排、冲突检测与插入模拟；mock simulator 用于高吞吐、可重复的策略实验。
 
 4. 分发层  
    模拟成功后的 bundle 会进入 builder dispatcher，按信誉、reward 和 exploration / exploitation 策略做 block producer 路由。
 
 5. 观测层  
-   系统提供 block / validator / searcher / builder 多维指标接口，运行日志统一写入 `logs/rebate.log`，实验指标写入配置指定的 `logs/experiment*` 目录。
+   系统提供 block / validator / searcher / builder 多维指标接口，运行日志统一写入 `logs/rebate.log`，实验指标写入配置指定的 `logs/experiment*` 目录，并通过 JSONL 文件记录 bundle、dispatch、builder snapshot 和 block summary。
+
+整体架构如下：
+
+```text
+┌───────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                       Clients / 外部交互层                                      │
+│                                                                                               │
+│  ┌────────────────────────────┐          ┌─────────────────────────────────────────────────┐  │
+│  │ user                       │          │ searcher                                        │  │
+│  │ - replay bundle            │          │ - subscribe /events hints                       │  │
+│  │ - mock bundle generator    │          │ - build backrun bundle                          │  │
+│  │ - subscribe /blocks        │          │ - submit backrun bundle                         │  │
+│  └──────────────┬─────────────┘          └──────────────────────┬──────────────────────────┘  │
+└─────────────────┼────────────────────────────────────────────────┼─────────────────────────────┘
+                  │ JSON-RPC: eth_sendMevBundle / eth_callBundle  │
+                  └────────────────────────────┬───────────────────┘
+                                               ▼
+┌───────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                            server                                             │
+│                                                                                               │
+│  ┌──────────────────────┐       ┌──────────────────────┐       ┌──────────────────────────┐   │
+│  │ JSON-RPC API          ├──────▶│ SimulationQueue       ├──────▶│ SimulationWorker(s)       │   │
+│  │ POST /                │       │ target block gating   │       │ workers = config value    │   │
+│  └──────────┬───────────┘       └──────────┬───────────┘       └──────────┬───────────────┘   │
+│             │                              │                              │                   │
+│             │                              │                              ▼                   │
+│             │                              │                 ┌──────────────────────────┐      │
+│             │                              └────────────────▶│ ReplaySimulator          │      │
+│             │                                                │ or MockSimulator         │      │
+│             │                                                └──────────┬───────────────┘      │
+│             │                                                           │ simulation result    │
+│             │                                                           ▼                      │
+│             │        ┌──────────────────────┐       ┌──────────────────────────┐              │
+│             ├───────▶│ Builder HTTP API      │       │ BundleStore              │              │
+│             │        │ /builders/scores      │       │ matching hash + result   │              │
+│             │        │ /builders/register    │       └──────────┬───────────────┘              │
+│             │        │ /builders/observe     │                  │                              │
+│             │        └──────────┬───────────┘                  ▼                              │
+│             │                   │                    ┌──────────────────────────┐              │
+│             │                   │                    │ Hint Extractor           │              │
+│             │                   │                    │ privacy-controlled hints │              │
+│             │                   │                    └──────────┬───────────────┘              │
+│             │                   │                               ▼                              │
+│             │                   │                    ┌──────────────────────────┐              │
+│             │                   │                    │ SSE Hub                  │              │
+│             │                   │                    │ /events hints            │              │
+│             │                   │                    │ /blocks new blocks       │              │
+│             │                   │                    └──────────────────────────┘              │
+│             │                   │                                                               │
+│             │                   ▼                                                               │
+│             │        ┌──────────────────────┐       ┌──────────────────────────┐              │
+│             │        │ BuilderRegistry       │◀─────▶│ Builder Dispatcher        │              │
+│             │        │ BaseScore/Score/Stats │       │ Score + Reward + Bandit  │              │
+│             │        └──────────┬───────────┘       └──────────┬───────────────┘              │
+│             │                   │                              │ eth_sendMevBundle             │
+│             │                   │                              ▼                              │
+│             │                   │                    ┌──────────────────────────┐              │
+│             │                   │                    │ Builders / Producers      │              │
+│             │                   │                    │ alpha / beta / ...        │              │
+│             │                   │                    │ mock builder servers      │              │
+│             │                   │                    └──────────────────────────┘              │
+│             │                   │                                                               │
+│             │                   ▼                                                               │
+│             │        ┌──────────────────────┐       ┌──────────────────────────┐              │
+│             └───────▶│ MetricsStore          ├──────▶│ ExperimentRecorder        │              │
+│                      │ block/validator/searcher│     │ metadata + JSONL files   │              │
+│                      └──────────────────────┘       └──────────────────────────┘              │
+└───────────────────────────────────────────────────────────────────────────────────────────────┘
+```
 
 ## 3. 核心技术实现
 
 ### 3.1 真实交易数据采集与回放
 
-系统首先通过交易采集程序从 Ethereum 公共 RPC 节点拉取区块、交易和收据，并写入 CSV。数据集中保留了后续模拟所需的关键字段，包括：
+在 replay 模式下，系统首先通过交易采集程序从 Ethereum 公共 RPC 节点拉取区块、交易和收据，并写入 CSV。数据集中保留了后续模拟所需的关键字段，包括：
 
 - 区块号、区块哈希、时间戳、base fee
 - 交易哈希、from、to、nonce
@@ -45,10 +114,12 @@
 这部分实现位于：
 
 - [internal/dataset/dataset.go](file:///Users/bytedance/validator-mev-rebate/eth/rebate/internal/dataset/dataset.go)
+- [internal/sim/replay_sim.go](file:///Users/bytedance/validator-mev-rebate/eth/rebate/internal/sim/replay_sim.go)
+- [internal/client/replay_bundle.go](file:///Users/bytedance/validator-mev-rebate/eth/rebate/internal/client/replay_bundle.go)
 
 ### 3.2 Replay Simulator：基于真实区块上下文的重排模拟
 
-Replay simulator 是本项目的核心技术模块之一。与简单的“固定返回成功”式 mock 模拟不同，它会：
+Replay simulator 是本项目的核心技术模块之一。与用于长周期压测的 mock 模拟不同，它会：
 
 1. 根据 bundle 的目标区块，在数据集中找到对应的历史区块；
 2. 展开 bundle 中的交易和嵌套 bundle；
@@ -62,6 +133,9 @@ Replay simulator 是本项目的核心技术模块之一。与简单的“固定
 
 这部分实现位于：
 
+- [internal/sim/replay_sim.go](file:///Users/bytedance/validator-mev-rebate/eth/rebate/internal/sim/replay_sim.go)
+- [internal/sim/mock_sim.go](file:///Users/bytedance/validator-mev-rebate/eth/rebate/internal/sim/mock_sim.go)
+
 ### 3.3 Hint 提取与隐私控制
 
 系统支持从成功模拟的 bundle 中提取 hint，并通过 SSE 广播给 searcher。hint 提取支持多种粒度：
@@ -73,25 +147,146 @@ Replay simulator 是本项目的核心技术模块之一。与简单的“固定
 - logs / special logs
 - 降精度后的 gas 相关信息
 
+成功模拟后，系统使用 signer 生成 matching hash，把 bundle 与模拟结果写入 `BundleStore`，再按 bundle privacy 配置提取 hint。`searcher` 通过 `/events` SSE 订阅 hint；mock user 可以通过 `/blocks` SSE 订阅新区块事件，以便在新区块到来时生成新 bundle。
+
+这部分实现位于：
+
+- [internal/hints/hints.go](file:///Users/bytedance/validator-mev-rebate/eth/rebate/internal/hints/hints.go)
+- [internal/sse/hub.go](file:///Users/bytedance/validator-mev-rebate/eth/rebate/internal/sse/hub.go)
+- [internal/sse/block_hub.go](file:///Users/bytedance/validator-mev-rebate/eth/rebate/internal/sse/block_hub.go)
 
 ### 3.4 模拟工作流与服务端调度
 
 `server` 作为系统中心节点，负责：
 
-1. 加载配置和 replay dataset；
-2. 初始化 signer、queue、bundle store、simulator、metrics store、dispatcher；
-3. 启动 simulation worker；
-4. 对外暴露 JSON-RPC、SSE 和 metrics 接口；
-5. 周期性推进当前回放区块；
-6. 在每个 bundle 成功模拟后，提取 hint、更新 metrics、并分发给 builder。
+1. 加载 YAML 配置，并根据 `simulator.mode` 初始化 replay 或 mock simulator；
+2. 初始化 signer、queue、bundle store、metrics store、experiment recorder、builder registry 和 dispatcher；
+3. 按 `simulator.workers` 启动多个 simulation worker；
+4. 如果配置了 `mock_builders`，在本进程内启动 mock builder HTTP 节点；
+5. 对外暴露 JSON-RPC、SSE、builder 管理和 metrics 接口；
+6. 周期性推进当前区块，并把新区块广播到 `/blocks`；
+7. 在每个 bundle 成功模拟后，提取 hint、更新 metrics、记录实验事件，并分发给 builder；
+8. mock 模式下，如果配置 `simulator.stop_block_number`，区块推进到该高度后 server 自动 graceful shutdown。
 
 Simulation worker 的流程是：
 
 1. 从模拟队列中取出 bundle；
-2. 调用 replay simulator 执行模拟；
-3. 根据结果更新 metrics；
-4. 若成功则生成 matching hash、广播 hint、存储结果；
-5. 将 bundle 交给 builder dispatcher。
+2. 调用当前配置的 simulator 执行模拟；
+3. 根据模拟结果更新 block / validator / searcher metrics；
+4. 将 bundle simulation event 写入实验 JSONL；
+5. 若成功则生成 matching hash、广播 hint、存储结果；
+6. 将 bundle 交给 builder dispatcher；
+7. dispatcher 选择 target producer、发送 bundle、记录 dispatch event；
+8. dispatcher 根据发送结果写入 builder observation，并触发动态 score 更新。
+
+运行时流程如下：
+
+```text
+┌────────────────┐
+│ user/searcher  │
+│ submit bundle  │
+└───────┬────────┘
+        │ POST / JSON-RPC: eth_sendMevBundle
+        ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ JSON-RPC API                                                                │
+│ - validate request                                                          │
+│ - parse SendMevBundleArgs                                                   │
+│ - enqueue by inclusion.block                                                │
+└───────┬──────────────────────────────────────────────────────────────────────┘
+        ▼
+┌──────────────────────┐       block update       ┌──────────────────────────┐
+│ SimulationQueue       │◀────────────────────────│ blockUpdater              │
+│ wait until target     │                         │ AdvanceBlock()            │
+│ block is processable  │                         │ Broadcast /blocks         │
+└───────┬──────────────┘                         └───────────┬──────────────┘
+        │ pop bundle                                          │ if mock and
+        ▼                                                     │ stop_block_number reached
+┌──────────────────────┐                                      ▼
+│ SimulationWorker      │                              ┌──────────────────┐
+│ worker goroutine      │                              │ graceful shutdown │
+└───────┬──────────────┘                              └──────────────────┘
+        │ SimulateBundle()
+        ▼
+┌──────────────────────────────┐
+│ ReplaySimulator / MockSimulator│
+│ - replay: reorder real block   │
+│ - mock: generate mock result   │
+└───────┬──────────────────────┘
+        │ simulation result
+        ▼
+┌──────────────────────────────┐
+│ MetricsStore                  │
+│ update block / validator      │
+│ / searcher metrics            │
+└───────┬──────────────────────┘
+        │ RecordBundleSimulation
+        ▼
+┌──────────────────────────────┐
+│ ExperimentRecorder            │
+│ bundle_events.jsonl           │
+└───────┬──────────────────────┘
+        │
+        ├────────────────────────── simulation failed ───────────────────────┐
+        │                                                                    │
+        ▼ simulation success                                                 │
+┌──────────────────────┐       ┌──────────────────────┐                     │
+│ BundleStore           │──────▶│ Hint Extractor        │                     │
+│ matching hash/result  │       │ privacy hints         │                     │
+└──────────────────────┘       └──────────┬───────────┘                     │
+                                          ▼                                 │
+                               ┌──────────────────────┐                    │
+                               │ SSE /events           │                    │
+                               │ searcher receives hint│                    │
+                               └──────────────────────┘                    │
+                                                                            │
+        ┌───────────────────────────────────────────────────────────────────┘
+        ▼
+┌──────────────────────┐
+│ Builder Dispatcher    │
+│ select target producer│
+└───────┬──────────────┘
+        │ read Score/Reward/Stats
+        ▼
+┌──────────────────────┐
+│ BuilderRegistry       │
+│ candidate snapshot    │
+└───────┬──────────────┘
+        │ target selected
+        ▼
+┌──────────────────────┐       eth_sendMevBundle      ┌──────────────────────┐
+│ Builder Dispatcher    ├─────────────────────────────▶│ Target Builder        │
+│ record dispatch event │◀─────────────────────────────┤ success / error       │
+└───────┬──────────────┘                               └──────────────────────┘
+        │ Observe dispatch result
+        ▼
+┌──────────────────────┐
+│ BuilderRegistry       │
+│ update reward stats   │
+│ update effective score│
+└───────┬──────────────┘
+        │ RecordBuilderSnapshot
+        ▼
+┌──────────────────────┐
+│ ExperimentRecorder    │
+│ builder_dispatches    │
+│ builder_snapshots     │
+│ block_summary         │
+└──────────────────────┘
+```
+
+服务端对外接口与当前实现对应如下：
+
+- `POST /`：JSON-RPC 入口，支持 `eth_sendMevBundle`、`eth_callBundle`、`eth_cancelBundle`、`eth_blockNumber`
+- `GET /events`：hint SSE stream
+- `GET /blocks`：新区块 SSE stream
+- `GET /builders/scores`：查询 builder 动态分数与画像
+- `POST /builders/register`：注册新 builder
+- `POST /builders/observe`：注入 builder 行为观测
+- `GET /metrics/block/{blockNumber}`：查询单区块指标
+- `GET /metrics/validator/{address}`、`GET /metrics/validators`：查询 validator 维度指标
+- `GET /metrics/searcher/{address}`、`GET /metrics/searchers`：查询 searcher 维度指标
+- `GET /metrics/global`、`GET /metrics/recent`：查询全局与近期区块指标
 
 ### 3.5 Builder / Block Producer 动态评分机制
 
@@ -250,6 +445,100 @@ newScore = clamp(newScore, 0.5, 100.0)
 ### 3.6 Exploration / Exploitation 分层分发
 
 系统在 builder / block producer 路由时，不再只按固定权重做 exploitation，而是加入了 exploration 层，用于解决新加入 producer 的冷启动问题和订单流中心化问题。
+
+Dispatcher 决策路径如下：
+
+```text
+┌──────────────────────────────┐
+│ Dispatch(bundle, simResult)  │
+└───────────────┬──────────────┘
+                ▼
+┌──────────────────────────────┐
+│ candidates = registry.All()  │
+└───────────────┬──────────────┘
+                ▼
+        ┌──────────────────────────────┐
+        │ privacy.builders is nonempty │
+        └───────────────┬──────────────┘
+                        │
+          yes ┌─────────▼─────────┐ no
+        ┌────▶│ filter candidates │──────────────┐
+        │     └─────────┬─────────┘              │
+        │               ▼                        ▼
+        │     ┌───────────────────┐      ┌───────────────────┐
+        │     │ filtered is empty │      │ use all builders   │
+        │     └─────────┬─────────┘      └─────────┬─────────┘
+        │               │ yes                      │
+        │               └──────────────┬───────────┘
+        │                              ▼
+        │                    ┌───────────────────┐
+        └────────────────────│ final candidates  │
+                             └─────────┬─────────┘
+                                       ▼
+                              ┌────────────────┐
+                              │ len == 1 ?     │
+                              └───────┬────────┘
+                                      │ yes
+                                      ▼
+                              ┌────────────────┐
+                              │ direct target  │
+                              └───────┬────────┘
+                                      │
+                         no           │
+          ┌───────────────────────────┘
+          ▼
+┌──────────────────────────────────────┐
+│ explorationCandidates =              │
+│   attempts < minExploreDispatches    │
+│   OR age < newProducerGracePeriod    │
+└───────────────┬──────────────────────┘
+                ▼
+        ┌────────────────────────────────┐
+        │ exploration enabled AND        │
+        │ explorationCandidates nonempty │
+        └───────────────┬────────────────┘
+                        │ no
+                        ▼
+              ┌─────────────────────┐
+              │ Exploitation layer   │
+              │ weight=expectedReward│
+              └──────────┬──────────┘
+                         │
+                         │ yes
+                         ▼
+              ┌─────────────────────┐
+              │ exploration_mode     │
+              └──────┬────────┬─────┘
+                     │        │
+          alternating│        │probabilistic
+                     ▼        ▼
+       ┌────────────────┐   ┌──────────────────────────┐
+       │ nextExplore ?   │   │ random < explorationRate │
+       └───────┬────────┘   └────────────┬─────────────┘
+               │ yes                     │ yes
+               ▼                         ▼
+       ┌──────────────────────────────────────────────┐
+       │ Exploration layer                             │
+       │ weight=banditScore                            │
+       │ banditScore = explorationWeight + ucbBonus   │
+       └───────────────────┬──────────────────────────┘
+                           │
+       no / random miss    │
+              ┌────────────┘
+              ▼
+       ┌──────────────────────────────────────────────┐
+       │ weightedPick                                 │
+       │ pick=random(0,totalWeight)                   │
+       │ select first cumulativeWeight > pick         │
+       └───────────────────┬──────────────────────────┘
+                           ▼
+       ┌──────────────────────────────────────────────┐
+       │ target builder selected                       │
+       │ send eth_sendMevBundle                        │
+       │ record dispatch + observe result              │
+       │ update reward stats + effective score         │
+       └──────────────────────────────────────────────┘
+```
 
 一次 dispatch 的目标 producer 选择流程如下：
 
