@@ -1,4 +1,4 @@
-# MEV Rebate主哟技术
+# MEV Rebate主要技术
 
 ## 1. 项目目标
 
