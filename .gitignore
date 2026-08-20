@@ -1,3 +1,7 @@
 validator-mev-rebate
 .DS_Store
 eth/bsc-searcher-pics/
+eth/rebate/server
+eth/rebate/user
+eth/rebate/txcollector
+eth/rebate/searcher
