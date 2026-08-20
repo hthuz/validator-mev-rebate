@@ -20,6 +20,7 @@ type BuilderConfig struct {
 
 type ExplorationConfig struct {
 	Enabled               bool    `mapstructure:"enabled"`
+	Mode                  string  `mapstructure:"mode"`
 	Rate                  float64 `mapstructure:"rate"`
 	MinExploreDispatches  uint64  `mapstructure:"min_explore_dispatches"`
 	NewProducerAgeSeconds int     `mapstructure:"new_producer_age_seconds"`
@@ -44,6 +45,7 @@ type SimulatorConfig struct {
 	BlockIntervalSeconds int    `mapstructure:"block_interval_seconds"`
 	BlockIntervalMillis  int    `mapstructure:"block_interval_milliseconds"`
 	BlockGasLimit        uint64 `mapstructure:"block_gas_limit"`
+	Workers              int    `mapstructure:"workers"`
 }
 
 // MockBuilderConfig mock builder 监听配置
@@ -103,7 +105,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("simulator.block_interval_seconds", 2)
 	v.SetDefault("simulator.block_interval_milliseconds", 0)
 	v.SetDefault("simulator.block_gas_limit", 30000000)
+	v.SetDefault("simulator.workers", 1)
 	v.SetDefault("dispatcher.exploration.enabled", true)
+	v.SetDefault("dispatcher.exploration.mode", "probabilistic")
 	v.SetDefault("dispatcher.exploration.rate", 0.20)
 	v.SetDefault("dispatcher.exploration.min_explore_dispatches", 5)
 	v.SetDefault("dispatcher.exploration.new_producer_age_seconds", 600)
@@ -128,6 +132,9 @@ func validate(cfg *Config) error {
 	if cfg.Simulator.BlockGasLimit == 0 {
 		return fmt.Errorf("simulator.block_gas_limit must be > 0")
 	}
+	if cfg.Simulator.Workers <= 0 {
+		return fmt.Errorf("simulator.workers must be > 0")
+	}
 	if cfg.Simulator.Mode == "replay" && cfg.Simulator.DatasetPath == "" {
 		return fmt.Errorf("simulator.dataset_path is required in replay mode")
 	}
@@ -147,6 +154,9 @@ func validate(cfg *Config) error {
 	}
 	if cfg.Dispatcher.Exploration.Rate < 0 || cfg.Dispatcher.Exploration.Rate > 1 {
 		return fmt.Errorf("dispatcher.exploration.rate must be in [0,1]")
+	}
+	if cfg.Dispatcher.Exploration.Mode != "probabilistic" && cfg.Dispatcher.Exploration.Mode != "alternating" {
+		return fmt.Errorf("dispatcher.exploration.mode must be probabilistic or alternating")
 	}
 	if cfg.Dispatcher.Exploration.NewProducerAgeSeconds < 0 {
 		return fmt.Errorf("dispatcher.exploration.new_producer_age_seconds must be >= 0")

@@ -21,11 +21,13 @@
 
 - simulator：`mock`
 - 目标区块数：约 10000
-- 实际推进区块：约 10807
+- block summary 实际记录：14964
+- bundle 目标区块范围：约 10174 个
 - 区块间隔：10ms
-- user bundle 间隔：100ms
-- exploration rate：`0.20`
-- 最少探索次数：5
+- user：每个新区块随机发送 `0..5` 个 bundle
+- exploration mode：`alternating`
+- exploration rate：`0.20`（交替模式下不作为随机概率）
+- 最少探索次数：1000
 - score 范围：`0.5–100`
 - 正向 score 目标最多为 `BaseScore + 15`
 - 正向更新步长：目标差值的 `1%`
@@ -69,45 +71,45 @@ POST /builders/register
 
 | 指标 | 结果 |
 |---|---:|
-| 区块 summary | 10643 |
-| bundle events | 857 |
-| dispatch events | 857 |
-| builder snapshot events | 913 |
-| exploration dispatch | 178 |
-| exploitation dispatch | 679 |
+| 区块 summary | 14964 |
+| bundle events | 25618 |
+| dispatch events | 25618 |
+| builder snapshot events | 25674 |
+| exploration dispatch | 12809 |
+| exploitation dispatch | 12809 |
 | bundle 仿真成功率 | 100% |
-| bundle-level MEV profit | 0.009856711 ETH |
-| bundle-level refundable value | 0.000985671 ETH |
+| bundle-level MEV profit | 0.295325812 ETH |
+| bundle-level refundable value | 0.029532581 ETH |
 
-10000 区块目标已经达到，实际多出的区块来自停止时的轮询和进程退出延迟。
+实验目标区块范围已达到约 10000 个。由于 server 在 user 停止后仍继续推进了一段时间，block summary 多记录了部分 shutdown 延迟期间的区块；bundle 目标区块范围为 `1000799..1010972`，共约 10174 个。
 
 ## 4. Builder 分发结果
 
 | Builder | Dispatch | 占比 | Exploration | Exploitation |
 |---|---:|---:|---:|---:|
-| `alpha` | 207 | 24.2% | 42 | 165 |
-| `beta` | 155 | 18.1% | 37 | 118 |
-| `gamma` | 140 | 16.3% | 27 | 113 |
-| `delta` | 69 | 8.1% | 15 | 54 |
-| `epsilon` | 10 | 1.2% | 2 | 8 |
-| `theta` | 131 | 15.3% | 25 | 106 |
-| `zeta` | 145 | 16.9% | 30 | 115 |
+| `alpha` | 6050 | 23.6% | 2957 | 3093 |
+| `beta` | 5054 | 19.7% | 2505 | 2549 |
+| `gamma` | 4170 | 16.3% | 2114 | 2056 |
+| `delta` | 2542 | 9.9% | 1287 | 1255 |
+| `epsilon` | 460 | 1.8% | 267 | 193 |
+| `theta` | 3518 | 13.7% | 1679 | 1839 |
+| `zeta` | 3824 | 14.9% | 2000 | 1824 |
 
-`zeta` 在运行中才注册，但仍然获得了 145 次 dispatch，其中 30 次来自 exploration，说明运行时加入的 builder 能够进入冷启动流程。
+`zeta` 在运行中才注册，但仍然获得了 3824 次 dispatch，其中 2000 次来自 exploration，说明运行时加入的 builder 能够进入冷启动流程。
 
-恶意 `epsilon` 只获得了 10 次 dispatch，占比 1.2%；高分恶意 `theta` 在作恶后仍保留了一部分历史流量，但 score 下降后其后续权重明显降低。alpha 的分发占比为 24.2%，未形成对其他 builder 的绝对集中，说明竞争惩罚对流量集中产生了温和的抑制作用。
+恶意 `epsilon` 获得了 460 次 dispatch，占比 1.8%；高分恶意 `theta` 在作恶后仍保留了一部分历史流量，但 score 下降后其后续权重明显降低。alpha 的分发占比为 23.6%，仍未形成绝对集中。
 
-各 builder 的总分发 bundle 数和被选中的不同目标区块数如下。由于本轮每个目标区块只产生一次 dispatch，因此两项数值相同；统计脚本会对重复目标区块自动去重。
+各 builder 的总分发 bundle 数和被选中的不同目标区块数如下。本轮同一目标区块可能包含多个 bundle，因此两项数值不同；统计脚本会对目标区块自动去重。
 
 | Builder | 总分发 bundle | 被选中区块数 |
 |---|---:|---:|
-| `alpha` | 207 | 207 |
-| `beta` | 155 | 155 |
-| `gamma` | 140 | 140 |
-| `delta` | 69 | 69 |
-| `epsilon` | 10 | 10 |
-| `theta` | 131 | 131 |
-| `zeta` | 145 | 145 |
+| `alpha` | 6050 | 4455 |
+| `beta` | 5054 | 3894 |
+| `gamma` | 4170 | 3381 |
+| `delta` | 2542 | 2232 |
+| `epsilon` | 460 | 432 |
+| `theta` | 3518 | 2775 |
+| `zeta` | 3824 | 2947 |
 
 ## 5. Score 变化
 
@@ -115,30 +117,17 @@ POST /builders/register
 
 | Builder | 初始 score | 最终 score | 变化 |
 |---|---:|---:|---:|
-| `alpha` | 85 | 98.84 | +13.84 |
-| `beta` | 67 | 81.37 | +14.37 |
-| `gamma` | 50 | 64.53 | +14.53 |
-| `delta` | 27 | 36.59 | +9.59 |
-| `epsilon` | 13 | 1.30 | -11.70 |
-| `theta` | 85 | 16.53 | -68.47 |
-| `zeta` | 60 | 74.48 | +14.48 |
+| `alpha` | 85 | 97.16 | +12.16 |
+| `beta` | 67 | 80.61 | +13.61 |
+| `gamma` | 50 | 64.55 | +14.55 |
+| `delta` | 27 | 39.63 | +12.63 |
+| `epsilon` | 13 | 1.70 | -11.30 |
+| `theta` | 85 | 19.12 | -65.88 |
+| `zeta` | 60 | 74.78 | +14.78 |
 
-实验配置中的 alpha 初始分为 85。新一轮实验中 alpha 最终为 98.84，而不是固定为 100；评分更新根据各 builder 的分发份额和相对平均 reward 计算竞争因子，集中度惩罚最多为 15%。因此，表现稳定且 well-behaved 的 alpha 仍保持较高分，但其流量份额和评分会受到其他竞争 builder 的温和制衡。
+实验配置中的 alpha 初始分为 85。当前轮 alpha 最终为 97.16，分发占比为 23.6%；评分更新仍根据各 builder 的分发份额和相对平均 reward 计算竞争因子，集中度惩罚最多为 15%。因此，表现稳定且 well-behaved 的 alpha 仍保持较高分，但不会无限制增长或完全独占订单流。
 
-阶段性 score：
-
-| 阶段 | beta | gamma | delta | epsilon | theta | zeta |
-|---|---:|---:|---:|---:|---:|---:|
-| 初始/注册后 | 95.35 | 79.82 | 62.86 | 16.22 | 93.91 | 60.66 |
-| 阶段 2 | 97.16 | 80.81 | 63.91 | 1.57 | 96.71 | 69.42 |
-| 阶段 3 | 98.11 | 81.21 | 64.40 | 1.40 | 98.15 | 72.96 |
-| 作恶开始后 | 98.59 | 81.40 | 64.58 | 1.36 | 94.75 | 74.22 |
-| 阶段 5 | 98.73 | 81.42 | 64.61 | 1.33 | 19.99 | 74.53 |
-| 阶段 6 | 98.77 | 81.42 | 64.58 | 1.30 | 17.87 | 74.62 |
-| 阶段 7 | 98.80 | 81.40 | 64.55 | 1.30 | 17.32 | 74.58 |
-| 最终阶段 | 98.81 | 81.37 | 64.52 | 1.30 | 16.84 | 74.51 |
-
-最终 dispatch 结束时的 snapshot score 为 alpha `98.84`、beta `81.37`、gamma `64.53`、delta `36.59`、epsilon `1.30`、theta `16.53`、zeta `74.48`。阶段采样和最终 snapshot 的时间点略有差异。
+当前 dispatch 结束时的 snapshot score 为 alpha `97.16`、beta `80.61`、gamma `64.55`、delta `39.63`、epsilon `1.70`、theta `19.12`、zeta `74.78`。
 
 ## 6. 结果分析
 
@@ -146,10 +135,10 @@ POST /builders/register
 
 正常 builder 的 score 是渐进变化的：
 
-- `alpha`：85 → 98.84，在保持高质量的同时受到竞争因子约束；
-- `beta`：67 → 81.37；
-- `gamma`：50 → 64.53；
-- `zeta`：60 → 74.48。
+- `alpha`：85 → 97.16，在保持高质量的同时通过交替分层避免无限增长；
+- `beta`：67 → 80.61；
+- `gamma`：50 → 64.55；
+- `zeta`：60 → 74.78。
 
 单次观测只按目标差值的 1% 更新，因此不会因为一次成功或一次高价值事件立即跳到高分。与此同时，目标分最多为 `BaseScore + 15`，且全局上限为 100，避免正常 builder 无限增长。
 
@@ -158,37 +147,40 @@ POST /builders/register
 `epsilon` 持续收到低成功率和 sandwich 观测：
 
 - sandwich events：40；
-- dispatch attempts：410；
-- dispatch successes：250；
+- dispatch attempts：860；
+- dispatch successes：700；
 - 最终 score：`1.30`。
 
 负向更新步长为 5%，高于正常上升的 1%，因此恶意 builder 的下降速度相对更快，但仍然是平滑下降，而不是单次归零。
 
 ### 6.3 新 builder
 
-`zeta` 在运行中途加入，初始 score 为 60，注册后立刻被标记为 exploration candidate。最终获得 145 次分发，其中 30 次为 exploration，并逐步上升到约 74.48 分，说明新 builder 不会因为加入时间晚而完全没有机会。
+`zeta` 在运行中途加入，初始 score 为 60，注册后立刻被标记为 exploration candidate。最终获得 3824 次分发，其中 2000 次为 exploration，并逐步上升到约 74.78 分，说明新 builder 不会因为加入时间晚而完全没有机会。
 
 ### 6.4 高分 builder 后续作恶
 
-`theta` 初始 score 为 85，前半程没有恶意行为，阶段采样中先升到约 98.15；从约 6000 区块开始注入高频恶意观测后，score 快速下降：
+`theta` 初始 score 为 85，前半程没有恶意行为；从约 6000 区块开始注入高频恶意观测后，score 快速下降至 19.12：
 
-- 作恶前：约 `98.15`；
-- 作恶后阶段：`19.99`、`17.87`、`17.32`、`16.84`；
-- 最终 snapshot：`16.53`；
+- 作恶后最终 snapshot：`19.12`；
 - sandwich events：40；
-- dispatch attempts：681；
-- dispatch successes：528。
+- dispatch attempts：4068；
+- dispatch successes：3915。
 
 这验证了 score 惩罚不依赖低初始信誉：高分 builder 只要持续作恶，同样会被快速降权。
 
 ### 6.5 长期分发策略
 
-整个实验中：
+本轮 user 通过 `/blocks` SSE 消费每个新区块事件，并为每个事件随机生成 `0..5` 个 bundle；服务端使用 32 个 mock simulation workers。最终有效 bundle 为 25618 个，目标区块范围约 10174 个，平均约 `2.52` 个 bundle/区块，符合 `0..5` 均匀随机分布的期望均值。
 
-- exploration：178 / 857，约 20.8%；
-- exploitation：679 / 857，约 79.2%。
+按目标区块统计，0 个 bundle 的区块为 1739 个，1、2、3、4、5 个 bundle 的区块分别为 1618、1616、1730、1777、1694 个；只有包含至少一个 bundle 的 8435 个区块会出现在 bundle 日志中。
 
-实际分布接近配置中的 20% exploration rate，同时新 builder 的冷启动流量也被覆盖。
+交替模式在每次存在探索候选时切换分层：
+
+- exploration：12809 / 25618，50%；
+- exploitation：12809 / 25618，50%；
+- 相邻 dispatch 分层发生切换：25617 / 25617。
+
+因此，交替模式不再由 `rate` 随机决定层级，而是严格保持 1:1 的 exploration/exploitation；`rate` 参数仅保留用于 probabilistic 模式。
 
 ## 7. 图表与原始数据
 
@@ -202,7 +194,6 @@ POST /builders/register
 - `bundle_events.jsonl`
 - `builder_dispatches.jsonl`
 - `builder_snapshots.jsonl`
-- `score_snapshots.jsonl`
 - `metadata.json`
 - `plots/summary.json`：包含每个 builder 的 `total_built_blocks` 和 `total_distributed_bundles`
 

@@ -54,6 +54,7 @@ func main() {
 		logger.Fatal().Err(err).Msg("Failed to build simulator")
 	}
 	hintBroadcaster := sse.NewHub()
+	blockBroadcaster := sse.NewBlockHub()
 	experimentRecorder, err := experiment.NewRecorder(cfg.Reporting.ExperimentDir)
 	if err != nil {
 		logger.Fatal().Err(err).Str("dir", cfg.Reporting.ExperimentDir).Msg("Failed to initialize experiment recorder")
@@ -74,6 +75,7 @@ func main() {
 	}
 	strategy := builder.StrategyConfig{
 		ExplorationEnabled:     cfg.Dispatcher.Exploration.Enabled,
+		ExplorationMode:        cfg.Dispatcher.Exploration.Mode,
 		ExplorationRate:        cfg.Dispatcher.Exploration.Rate,
 		MinExploreDispatches:   cfg.Dispatcher.Exploration.MinExploreDispatches,
 		NewProducerGracePeriod: time.Duration(cfg.Dispatcher.Exploration.NewProducerAgeSeconds) * time.Second,
@@ -86,9 +88,11 @@ func main() {
 			"block_interval_seconds":      cfg.Simulator.BlockIntervalSeconds,
 			"block_interval_milliseconds": cfg.Simulator.BlockIntervalMillis,
 			"block_gas_limit":             cfg.Simulator.BlockGasLimit,
+			"workers":                     cfg.Simulator.Workers,
 		},
 		"strategy": map[string]any{
 			"exploration_enabled":       strategy.ExplorationEnabled,
+			"exploration_mode":          strategy.ExplorationMode,
 			"exploration_rate":          strategy.ExplorationRate,
 			"min_explore_dispatches":    strategy.MinExploreDispatches,
 			"new_producer_grace_period": strategy.NewProducerGracePeriod.String(),
@@ -148,12 +152,16 @@ func main() {
 	shareAPI := api.NewMevShareAPI(signer, simQueue, store, simulator)
 
 	// 7. 创建模拟工作器
-	worker := sim.NewSimulationWorker(simulator, simQueue, store, hintBroadcaster, signer, metricsStore, dispatcher, experimentRecorder)
+	workers := make([]*sim.SimulationWorker, 0, cfg.Simulator.Workers)
+	for i := 0; i < cfg.Simulator.Workers; i++ {
+		workers = append(workers, sim.NewSimulationWorker(simulator, simQueue, store, hintBroadcaster, signer, metricsStore, dispatcher, experimentRecorder))
+	}
 
 	// 8. 创建 HTTP 服务器
 	mux := http.NewServeMux()
 	mux.Handle("/", api.NewRootHandler(shareAPI))
 	mux.HandleFunc("/events", api.NewSSEHandler(hintBroadcaster))
+	mux.HandleFunc("/blocks", api.NewBlockSSEHandler(blockBroadcaster))
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
@@ -180,12 +188,14 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	worker.Start(ctx)
+	for _, worker := range workers {
+		worker.Start(ctx)
+	}
 	blockInterval := time.Duration(cfg.Simulator.BlockIntervalSeconds) * time.Second
 	if cfg.Simulator.BlockIntervalMillis > 0 {
 		blockInterval = time.Duration(cfg.Simulator.BlockIntervalMillis) * time.Millisecond
 	}
-	go blockUpdater(ctx, simulator, simQueue, metricsStore, blockInterval)
+	go blockUpdater(ctx, simulator, simQueue, metricsStore, blockBroadcaster, blockInterval)
 
 	go func() {
 		logger.Info().Str("addr", server.Addr).Msg("HTTP server listening")
@@ -227,7 +237,9 @@ func main() {
 
 	// 11. 优雅关闭
 	cancel()
-	worker.Stop()
+	for _, worker := range workers {
+		worker.Stop()
+	}
 	simQueue.Close()
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -263,7 +275,7 @@ func buildSimulator(cfg *config.Config) (sim.SimulationBackend, error) {
 }
 
 // blockUpdater 推进当前区块
-func blockUpdater(ctx context.Context, backend sim.SimulationBackend, queue *queue.SimulationQueue, metrics *metrics.MetricsStore, blockInterval time.Duration) {
+func blockUpdater(ctx context.Context, backend sim.SimulationBackend, queue *queue.SimulationQueue, metrics *metrics.MetricsStore, blockBroadcaster *sse.BlockHub, blockInterval time.Duration) {
 	advancer, ok := backend.(sim.BlockAdvancer)
 	if !ok {
 		logger.Warn().Msg("Simulator does not support block advancement")
@@ -298,6 +310,9 @@ func blockUpdater(ctx context.Context, backend sim.SimulationBackend, queue *que
 			validator := common.HexToAddress(validators[validatorIndex%len(validators)])
 			metrics.StartNewBlock(newBlock, validator)
 			validatorIndex++
+		}
+		if blockBroadcaster != nil {
+			blockBroadcaster.Broadcast(newBlock)
 		}
 
 		logger.Info().Uint64("block", newBlock).Msg("New block")

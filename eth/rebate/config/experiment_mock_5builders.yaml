@@ -5,6 +5,7 @@ simulator:
   mode: mock
   block_interval_seconds: 1
   block_interval_milliseconds: 10
+  workers: 32
   block_gas_limit: 30000000
 
 reporting:
@@ -13,8 +14,9 @@ reporting:
 dispatcher:
   exploration:
     enabled: true
+    mode: alternating
     rate: 0.20
-    min_explore_dispatches: 5
+    min_explore_dispatches: 1000
     new_producer_age_seconds: 600
     uncertainty_weight: 1.25
     fresh_producer_bonus: 0.75

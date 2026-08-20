@@ -341,6 +341,12 @@ def write_summary(
         "total_mev_profit_eth": round(
             sum(wei_to_eth(item.get("total_mev_profit_wei")) for item in blocks), 6
         ),
+        "total_bundle_profit_eth": round(
+            sum(wei_to_eth(item.get("profit_wei")) for item in bundles), 6
+        ),
+        "total_bundle_refundable_eth": round(
+            sum(wei_to_eth(item.get("refundable_wei")) for item in bundles), 6
+        ),
         "builder_block_counts": builder_block_counts,
         "experiment_metadata": metadata,
     }

@@ -25,6 +25,7 @@ const (
 
 type StrategyConfig struct {
 	ExplorationEnabled     bool
+	ExplorationMode        string
 	ExplorationRate        float64
 	MinExploreDispatches   uint64
 	NewProducerGracePeriod time.Duration
@@ -90,12 +91,14 @@ func (l *DispatchLog) ByBuilder(name string) []DispatchRecord {
 
 // Dispatcher 按 score 加权将 bundle 分发给 builder
 type Dispatcher struct {
-	registry *Registry
-	log      *DispatchLog
-	rng      *rand.Rand
-	strategy StrategyConfig
-	recorder *experiment.Recorder
-	mu       sync.Mutex // 保护 rng
+	registry    *Registry
+	log         *DispatchLog
+	rng         *rand.Rand
+	strategy    StrategyConfig
+	recorder    *experiment.Recorder
+	mu          sync.Mutex // 保护 rng
+	layerMu     sync.Mutex // 保护交替模式的层选择状态
+	nextExplore bool
 }
 
 // NewDispatcher 创建分发器
@@ -105,11 +108,12 @@ func NewDispatcher(registry *Registry, strategy StrategyConfig, recorders ...*ex
 		recorder = recorders[0]
 	}
 	return &Dispatcher{
-		registry: registry,
-		log:      newDispatchLog(),
-		rng:      rand.New(rand.NewSource(time.Now().UnixNano())),
-		strategy: normalizeStrategyConfig(strategy),
-		recorder: recorder,
+		registry:    registry,
+		log:         newDispatchLog(),
+		rng:         rand.New(rand.NewSource(time.Now().UnixNano())),
+		strategy:    normalizeStrategyConfig(strategy),
+		nextExplore: true,
+		recorder:    recorder,
 	}
 }
 
@@ -308,6 +312,9 @@ func normalizeStrategyConfig(cfg StrategyConfig) StrategyConfig {
 	if cfg.ExplorationRate > 1 {
 		cfg.ExplorationRate = 1
 	}
+	if cfg.ExplorationMode == "" {
+		cfg.ExplorationMode = "probabilistic"
+	}
 	if cfg.MinExploreDispatches == 0 {
 		cfg.MinExploreDispatches = 5
 	}
@@ -344,6 +351,21 @@ func (d *Dispatcher) selectTarget(builders []*BuilderInfo, now time.Time) (*Buil
 		return target, decision
 	}
 
+	if d.strategy.ExplorationMode == "alternating" {
+		d.layerMu.Lock()
+		explore := d.nextExplore
+		d.nextExplore = !d.nextExplore
+		d.layerMu.Unlock()
+		if explore {
+			return d.selectExplorationTarget(explorationCandidates, now, decision)
+		}
+		target := d.weightedPick(builders, func(b *BuilderInfo) float64 { return d.expectedReward(b) })
+		decision.ExpectedReward = d.expectedReward(target)
+		decision.BanditScore = decision.ExpectedReward
+		decision.Reason = "alternating_exploitation"
+		return target, decision
+	}
+
 	if d.nextFloat64() >= d.strategy.ExplorationRate {
 		target := d.weightedPick(builders, func(b *BuilderInfo) float64 { return d.expectedReward(b) })
 		decision.ExpectedReward = d.expectedReward(target)
@@ -351,6 +373,12 @@ func (d *Dispatcher) selectTarget(builders []*BuilderInfo, now time.Time) (*Buil
 		return target, decision
 	}
 
+	return d.selectExplorationTarget(explorationCandidates, now, decision)
+}
+
+func (d *Dispatcher) selectExplorationTarget(
+	explorationCandidates []*BuilderInfo, now time.Time, decision DispatchDecision,
+) (*BuilderInfo, DispatchDecision) {
 	decision.Layer = dispatchLayerExploration
 	decision.Reason = "ucb_reward_plus_uncertainty"
 	target := d.weightedPick(explorationCandidates, func(b *BuilderInfo) float64 {

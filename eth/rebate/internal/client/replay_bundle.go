@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"rebate/internal/dataset"
 	"rebate/pkg/types"
+	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -21,6 +22,7 @@ type ReplayBundleBuilder struct {
 	dataset *dataset.Dataset
 	random  *rand.Rand
 	mock    bool
+	mu      sync.Mutex
 }
 
 func NewReplayBundleBuilder(datasetPath string) (*ReplayBundleBuilder, error) {
@@ -40,6 +42,15 @@ func NewMockBundleBuilder() *ReplayBundleBuilder {
 		random: rand.New(rand.NewSource(time.Now().UnixNano())),
 		mock:   true,
 	}
+}
+
+func (b *ReplayBundleBuilder) RandomIntn(n int) int {
+	if n <= 0 {
+		return 0
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.random.Intn(n)
 }
 
 func (b *ReplayBundleBuilder) BuildBundle(currentBlock uint64) (*types.SendMevBundleArgs, error) {
@@ -129,6 +140,9 @@ func (b *ReplayBundleBuilder) BuildBackrunBundle(currentBlock uint64, hint *type
 }
 
 func (b *ReplayBundleBuilder) buildMockBundle(currentBlock uint64, backrun bool, hint *types.Hint) (*types.SendMevBundleArgs, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
 	rawTx, err := b.buildMockTransaction()
 	if err != nil {
 		return nil, err

@@ -80,6 +80,32 @@ func TestSelectTargetFallsBackToExploitationWhenExplorationDisabled(t *testing.T
 	}
 }
 
+func TestSelectTargetAlternatesLayers(t *testing.T) {
+	registry := NewRegistry()
+	for _, name := range []string{"builder-a", "builder-b"} {
+		if err := registry.Register(name, "http://"+name, 50); err != nil {
+			t.Fatalf("Register: %v", err)
+		}
+	}
+	dispatcher := NewDispatcher(registry, StrategyConfig{
+		ExplorationEnabled:   true,
+		ExplorationMode:      "alternating",
+		MinExploreDispatches: 100,
+	})
+
+	builders := registry.All()
+	first, _ := dispatcher.selectTarget(builders, time.Now())
+	second, _ := dispatcher.selectTarget(builders, time.Now())
+	third, _ := dispatcher.selectTarget(builders, time.Now())
+	if first == nil || second == nil || third == nil {
+		t.Fatal("expected selected builders")
+	}
+	_, firstDecision := dispatcher.selectTarget(builders, time.Now())
+	if firstDecision.Layer != dispatchLayerExploitation {
+		t.Fatalf("expected alternating mode to return exploitation on fourth call, got %q", firstDecision.Layer)
+	}
+}
+
 func TestExpectedRewardUsesObservedReward(t *testing.T) {
 	registry := NewRegistry()
 	if err := registry.Register("builder-a", "http://builder-a", 1.0); err != nil {
