@@ -81,6 +81,7 @@ func main() {
 			"block_interval_milliseconds": cfg.Simulator.BlockIntervalMillis,
 			"block_gas_limit":             cfg.Simulator.BlockGasLimit,
 			"workers":                     cfg.Simulator.Workers,
+			"stop_block_number":           cfg.Simulator.StopBlockNumber,
 		},
 		"strategy": map[string]any{
 			"exploration_enabled":       strategy.ExplorationEnabled,
@@ -187,7 +188,19 @@ func main() {
 	if cfg.Simulator.BlockIntervalMillis > 0 {
 		blockInterval = time.Duration(cfg.Simulator.BlockIntervalMillis) * time.Millisecond
 	}
-	go blockUpdater(ctx, simulator, simQueue, metricsStore, blockBroadcaster, blockInterval)
+	stopBlockNumber := uint64(0)
+	if cfg.Simulator.Mode == "mock" {
+		stopBlockNumber = cfg.Simulator.StopBlockNumber
+	}
+	stopCh := make(chan struct{})
+	requestStop := func() {
+		select {
+		case <-stopCh:
+		default:
+			close(stopCh)
+		}
+	}
+	go blockUpdater(ctx, simulator, simQueue, metricsStore, blockBroadcaster, blockInterval, stopBlockNumber, requestStop)
 
 	go func() {
 		logger.Info().Str("addr", server.Addr).Msg("HTTP server listening")
@@ -201,7 +214,11 @@ func main() {
 	// 10. 等待退出信号
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	<-sigCh
+	select {
+	case <-sigCh:
+	case <-stopCh:
+		logger.Info().Uint64("stopBlockNumber", cfg.Simulator.StopBlockNumber).Msg("Configured stop block reached")
+	}
 
 	logger.Info().Msg("Shutting down...")
 
@@ -267,7 +284,16 @@ func buildSimulator(cfg *config.Config) (sim.SimulationBackend, error) {
 }
 
 // blockUpdater 推进当前区块
-func blockUpdater(ctx context.Context, backend sim.SimulationBackend, queue *queue.SimulationQueue, metrics *metrics.MetricsStore, blockBroadcaster *sse.BlockHub, blockInterval time.Duration) {
+func blockUpdater(
+	ctx context.Context,
+	backend sim.SimulationBackend,
+	queue *queue.SimulationQueue,
+	metrics *metrics.MetricsStore,
+	blockBroadcaster *sse.BlockHub,
+	blockInterval time.Duration,
+	stopBlockNumber uint64,
+	requestStop func(),
+) {
 	advancer, ok := backend.(sim.BlockAdvancer)
 	if !ok {
 		logger.Warn().Msg("Simulator does not support block advancement")
@@ -288,6 +314,13 @@ func blockUpdater(ctx context.Context, backend sim.SimulationBackend, queue *que
 		prevBlock := advancer.CurrentBlock()
 		if metrics != nil && prevBlock > 0 {
 			metrics.FinalizeBlock(prevBlock, advancer.BlockGasLimit())
+		}
+		if stopBlockNumber > 0 && prevBlock >= stopBlockNumber {
+			logger.Info().Uint64("block", prevBlock).Uint64("stopBlockNumber", stopBlockNumber).Msg("Reached configured stop block")
+			if requestStop != nil {
+				requestStop()
+			}
+			return false
 		}
 
 		newBlock, ok := advancer.AdvanceBlock()

@@ -47,6 +47,7 @@ type SimulatorConfig struct {
 	BlockIntervalMillis  int    `mapstructure:"block_interval_milliseconds"`
 	BlockGasLimit        uint64 `mapstructure:"block_gas_limit"`
 	Workers              int    `mapstructure:"workers"`
+	StopBlockNumber      uint64 `mapstructure:"stop_block_number"`
 }
 
 // MockBuilderConfig mock builder 监听配置
@@ -107,6 +108,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("simulator.block_interval_milliseconds", 0)
 	v.SetDefault("simulator.block_gas_limit", 30000000)
 	v.SetDefault("simulator.workers", 1)
+	v.SetDefault("simulator.stop_block_number", 0)
 	v.SetDefault("dispatcher.strategy.exploration_enabled", true)
 	v.SetDefault("dispatcher.strategy.exploration_mode", "probabilistic")
 	v.SetDefault("dispatcher.strategy.exploration_rate", 0.20)

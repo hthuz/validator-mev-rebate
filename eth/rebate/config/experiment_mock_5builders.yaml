@@ -7,6 +7,7 @@ simulator:
   block_interval_milliseconds: 10
   workers: 32
   block_gas_limit: 30000000
+  stop_block_number: 1010000
 
 reporting:
   experiment_dir: logs/experiment_mock_5builders
