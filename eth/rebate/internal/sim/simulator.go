@@ -3,14 +3,13 @@ package sim
 import (
 	"context"
 	"crypto/ecdsa"
-	"rebate/internal/experiment"
 	"sync"
 	"time"
 
 	"rebate/internal/builder"
 	"rebate/internal/hints"
 	"rebate/internal/logging"
-	"rebate/internal/metrics"
+	"rebate/internal/observability"
 	"rebate/internal/queue"
 	"rebate/pkg/types"
 	"rebate/pkg/utils"
@@ -27,9 +26,8 @@ type SimulationWorker struct {
 	store         *BundleStore
 	hintBroadcast hints.HintBroadcaster
 	signer        *ecdsa.PrivateKey
-	metrics       *metrics.MetricsStore
+	telemetry     *observability.Service
 	dispatcher    *builder.Dispatcher
-	recorder      *experiment.Recorder
 	wg            sync.WaitGroup
 	stopCh        chan struct{}
 }
@@ -41,23 +39,17 @@ func NewSimulationWorker(
 	store *BundleStore,
 	hintBroadcast hints.HintBroadcaster,
 	signer *ecdsa.PrivateKey,
-	metrics *metrics.MetricsStore,
+	telemetry *observability.Service,
 	dispatcher *builder.Dispatcher,
-	recorders ...*experiment.Recorder,
 ) *SimulationWorker {
-	var recorder *experiment.Recorder
-	if len(recorders) > 0 {
-		recorder = recorders[0]
-	}
 	return &SimulationWorker{
 		simulator:     simulator,
 		queue:         queue,
 		store:         store,
 		hintBroadcast: hintBroadcast,
 		signer:        signer,
-		metrics:       metrics,
+		telemetry:     telemetry,
 		dispatcher:    dispatcher,
-		recorder:      recorder,
 		stopCh:        make(chan struct{}),
 	}
 }
@@ -145,8 +137,8 @@ func (w *SimulationWorker) process(ctx context.Context, item *queue.BundleQueueI
 	}
 
 	// 4. 记录指标 (在检查成功/失败之前，因为要统计两者)
-	if w.metrics != nil {
-		w.metrics.RecordBundleResult(item.TargetBlock, result, builder, searcher)
+	if w.telemetry != nil {
+		w.telemetry.RecordBundleResult(item.TargetBlock, result, builder, searcher)
 	}
 
 	// 5. 检查模拟结果
@@ -208,7 +200,7 @@ func (w *SimulationWorker) sendToBuilders(bundle *types.SendMevBundleArgs, resul
 }
 
 func (w *SimulationWorker) recordBundleSimulation(bundle *types.SendMevBundleArgs, result *types.SimMevBundleResponse, searcher common.Address) {
-	if w.recorder == nil || bundle == nil || bundle.Metadata == nil || result == nil {
+	if w.telemetry == nil || bundle == nil || bundle.Metadata == nil || result == nil {
 		return
 	}
 
@@ -222,7 +214,7 @@ func (w *SimulationWorker) recordBundleSimulation(bundle *types.SendMevBundleArg
 		wantRefund = bundle.Privacy.WantRefund
 	}
 
-	event := experiment.BundleSimulationEvent{
+	event := observability.BundleSimulationEvent{
 		RecordedAt:         time.Now().UTC(),
 		BundleHash:         bundle.Metadata.BundleHash.Hex(),
 		TargetBlock:        uint64(bundle.Inclusion.BlockNumber),
@@ -255,9 +247,7 @@ func (w *SimulationWorker) recordBundleSimulation(bundle *types.SendMevBundleArg
 		event.DisplacedTxCount = len(result.Block.DisplacedTxs)
 	}
 
-	if err := w.recorder.RecordBundleSimulation(event); err != nil {
-		logging.Logger.Warn().Err(err).Msg("Failed to record bundle simulation event")
-	}
+	w.telemetry.RecordBundleSimulation(event)
 }
 
 func summarizeBundleBody(body []types.MevBundleBody) (txCount int, nestedCount int, hashRefCount int) {

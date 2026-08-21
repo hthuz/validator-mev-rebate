@@ -31,7 +31,7 @@ This is a **MEV-Share compatible validator rebate node** written in Go. It accep
 
 ```
 User Request → API Validation → BundleStore → SimulationQueue →
-SimulationWorker → Simulator → MetricsStore + HintBroadcast → Builders
+SimulationWorker → Simulator → ObservabilityService + HintBroadcast → Builders
 ```
 
 ### Layers
@@ -40,7 +40,7 @@ SimulationWorker → Simulator → MetricsStore + HintBroadcast → Builders
 
 **Processing Layer** (`internal/queue/`, `internal/sim/`): `SimulationQueue` is a priority queue ordered by target block. `SimulationWorker` dequeues bundles when their target block is reached, runs simulation, extracts hints, and records metrics. `BundleStore` is an in-memory store indexed by bundle hash and matching hash (for backrun lookups).
 
-**Metrics Layer** (`internal/metrics/`): Aggregates MEV data at three levels — per-block, per-validator, per-searcher — plus global totals. Exposed via REST endpoints at `/metrics/*`.
+**Observability Layer** (`internal/observability/`): Aggregates MEV data at per-block, per-validator, per-searcher, and global levels; writes experiment JSONL outputs; exposes REST endpoints at `/metrics/*`.
 
 **Types** (`pkg/types/`): Core structs — `SendMevBundleArgs`, `MevBundleBody`, `MevBundleInclusion`, `MevBundlePrivacy`, `SimMevBundleResponse`.
 

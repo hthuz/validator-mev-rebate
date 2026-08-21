@@ -1,4 +1,4 @@
-package metrics
+package observability
 
 import (
 	"encoding/json"
@@ -9,25 +9,20 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
-// MetricsHandler metrics HTTP 处理器
 type MetricsHandler struct {
 	store *MetricsStore
 }
 
-// NewMetricsHandler 创建 metrics 处理器
 func NewMetricsHandler(store *MetricsStore) *MetricsHandler {
 	return &MetricsHandler{store: store}
 }
 
-// GetBlockMetrics 获取区块指标
-// GET /metrics/block/{blockNumber}
 func (h *MetricsHandler) GetBlockMetrics(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// 从 URL 提取区块号
 	path := strings.TrimPrefix(r.URL.Path, "/metrics/block/")
 	blockNumber, err := strconv.ParseUint(path, 10, 64)
 	if err != nil {
@@ -44,15 +39,12 @@ func (h *MetricsHandler) GetBlockMetrics(w http.ResponseWriter, r *http.Request)
 	writeJSONResponse(w, metrics)
 }
 
-// GetValidatorMetrics 获取 Validator 指标
-// GET /metrics/validator/{address}
 func (h *MetricsHandler) GetValidatorMetrics(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// 从 URL 提取地址
 	path := strings.TrimPrefix(r.URL.Path, "/metrics/validator/")
 	if !common.IsHexAddress(path) {
 		writeJSONError(w, http.StatusBadRequest, "Invalid address")
@@ -69,8 +61,6 @@ func (h *MetricsHandler) GetValidatorMetrics(w http.ResponseWriter, r *http.Requ
 	writeJSONResponse(w, metrics)
 }
 
-// GetAllValidators 获取所有 Validators
-// GET /metrics/validators
 func (h *MetricsHandler) GetAllValidators(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -79,7 +69,6 @@ func (h *MetricsHandler) GetAllValidators(w http.ResponseWriter, r *http.Request
 
 	validators := h.store.GetAllValidatorMetrics()
 
-	// 转换为列表格式
 	type ValidatorSummary struct {
 		Address       string  `json:"address"`
 		TotalBlocks   uint64  `json:"totalBlocks"`
@@ -104,15 +93,12 @@ func (h *MetricsHandler) GetAllValidators(w http.ResponseWriter, r *http.Request
 	writeJSONResponse(w, summaries)
 }
 
-// GetSearcherMetrics 获取 Searcher 指标
-// GET /metrics/searcher/{address}
 func (h *MetricsHandler) GetSearcherMetrics(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// 从 URL 提取地址
 	path := strings.TrimPrefix(r.URL.Path, "/metrics/searcher/")
 	if !common.IsHexAddress(path) {
 		writeJSONError(w, http.StatusBadRequest, "Invalid address")
@@ -129,8 +115,6 @@ func (h *MetricsHandler) GetSearcherMetrics(w http.ResponseWriter, r *http.Reque
 	writeJSONResponse(w, metrics)
 }
 
-// GetAllSearchers 获取所有 Searchers
-// GET /metrics/searchers
 func (h *MetricsHandler) GetAllSearchers(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -139,7 +123,6 @@ func (h *MetricsHandler) GetAllSearchers(w http.ResponseWriter, r *http.Request)
 
 	searchers := h.store.GetAllSearcherMetrics()
 
-	// 转换为列表格式
 	type SearcherSummary struct {
 		Address      string  `json:"address"`
 		TotalBundles uint64  `json:"totalBundles"`
@@ -162,8 +145,6 @@ func (h *MetricsHandler) GetAllSearchers(w http.ResponseWriter, r *http.Request)
 	writeJSONResponse(w, summaries)
 }
 
-// GetGlobalMetrics 获取全局统计
-// GET /metrics/global
 func (h *MetricsHandler) GetGlobalMetrics(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -172,7 +153,6 @@ func (h *MetricsHandler) GetGlobalMetrics(w http.ResponseWriter, r *http.Request
 
 	metrics := h.store.GetGlobalMetrics()
 
-	// 转换为易读格式
 	type GlobalMetricsResponse struct {
 		TotalBlocks      uint64 `json:"totalBlocks"`
 		TotalBundles     uint64 `json:"totalBundles"`
@@ -201,15 +181,12 @@ func (h *MetricsHandler) GetGlobalMetrics(w http.ResponseWriter, r *http.Request
 	writeJSONResponse(w, resp)
 }
 
-// GetRecentBlocks 获取最近区块
-// GET /metrics/recent
 func (h *MetricsHandler) GetRecentBlocks(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// 获取 limit 参数，默认 10
 	limit := 10
 	if l := r.URL.Query().Get("limit"); l != "" {
 		if n, err := strconv.Atoi(l); err == nil && n > 0 && n <= 100 {
@@ -219,7 +196,6 @@ func (h *MetricsHandler) GetRecentBlocks(w http.ResponseWriter, r *http.Request)
 
 	blocks := h.store.GetRecentBlocks(limit)
 
-	// 转换为简化格式
 	type BlockSummary struct {
 		BlockNumber    uint64  `json:"blockNumber"`
 		Validator      string  `json:"validator"`
@@ -246,8 +222,6 @@ func (h *MetricsHandler) GetRecentBlocks(w http.ResponseWriter, r *http.Request)
 	writeJSONResponse(w, summaries)
 }
 
-// 辅助函数
-
 func writeJSONResponse(w http.ResponseWriter, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(data); err != nil {
@@ -258,7 +232,5 @@ func writeJSONResponse(w http.ResponseWriter, data interface{}) {
 func writeJSONError(w http.ResponseWriter, code int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	json.NewEncoder(w).Encode(map[string]string{
-		"error": message,
-	})
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
 }

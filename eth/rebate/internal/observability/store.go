@@ -1,9 +1,7 @@
-package metrics
+package observability
 
 import (
 	"math/big"
-	"rebate/internal/experiment"
-	"rebate/internal/logging"
 	"rebate/pkg/types"
 	"sync"
 	"time"
@@ -11,36 +9,18 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
-// ============== 全局指标存储 ==============
-
-// MetricsStore 指标存储
+// MetricsStore stores in-memory aggregate metrics for HTTP queries.
 type MetricsStore struct {
 	mu sync.RWMutex
 
-	// 区块指标 (blockNumber -> metrics)
-	blockMetrics map[uint64]*BlockMevMetrics
-
-	// Validator 指标 (address -> metrics)
+	blockMetrics     map[uint64]*BlockMevMetrics
 	validatorMetrics map[common.Address]*ValidatorMetrics
-
-	// 搜索者指标 (address -> metrics)
-	searcherMetrics map[common.Address]*SearcherMetrics
-
-	// 全局统计
-	globalStats *GlobalMetrics
-
-	// 当前区块跟踪
-	currentBlock uint64
-
-	recorder *experiment.Recorder
+	searcherMetrics  map[common.Address]*SearcherMetrics
+	globalStats      *GlobalMetrics
+	currentBlock     uint64
 }
 
-// NewMetricsStore 创建指标存储
-func NewMetricsStore(recorders ...*experiment.Recorder) *MetricsStore {
-	var recorder *experiment.Recorder
-	if len(recorders) > 0 {
-		recorder = recorders[0]
-	}
+func NewMetricsStore() *MetricsStore {
 	return &MetricsStore{
 		blockMetrics:     make(map[uint64]*BlockMevMetrics),
 		validatorMetrics: make(map[common.Address]*ValidatorMetrics),
@@ -51,100 +31,86 @@ func NewMetricsStore(recorders ...*experiment.Recorder) *MetricsStore {
 			StartTime:      time.Now(),
 			UpdatedAt:      time.Now(),
 		},
-		recorder: recorder,
 	}
 }
 
-// StartNewBlock 开始新区块的指标收集
 func (m *MetricsStore) StartNewBlock(blockNumber uint64, validator common.Address) *BlockMevMetrics {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	metrics := NewBlockMevMetrics(blockNumber, validator)
+	metrics := newBlockMevMetrics(blockNumber, validator)
 	m.blockMetrics[blockNumber] = metrics
 	m.currentBlock = blockNumber
 
-	// 初始化或更新 validator 指标
 	if _, exists := m.validatorMetrics[validator]; !exists {
-		m.validatorMetrics[validator] = NewValidatorMetrics(validator, blockNumber)
+		m.validatorMetrics[validator] = newValidatorMetrics(validator, blockNumber)
 		m.globalStats.UniqueValidators++
 	}
 
 	return metrics
 }
 
-// FinalizeBlock 结束区块指标收集
-func (m *MetricsStore) FinalizeBlock(blockNumber uint64, blockGasLimit uint64) {
+func (m *MetricsStore) FinalizeBlock(blockNumber uint64, blockGasLimit uint64) (*BlockSummaryEvent, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	metrics, exists := m.blockMetrics[blockNumber]
 	if !exists {
-		return
+		return nil, false
 	}
 
-	metrics.Finalize(blockGasLimit)
+	metrics.finalize(blockGasLimit)
 
-	// 更新 validator 指标
 	if validator, ok := m.validatorMetrics[metrics.ValidatorAddress]; ok {
-		validator.UpdateWithBlock(metrics)
+		validator.updateWithBlock(metrics)
 	}
 
-	// 更新全局统计
 	m.globalStats.TotalBlocks++
 	m.globalStats.TotalBundles += uint64(metrics.BundleCount)
 	m.globalStats.TotalMevProfit.Add(m.globalStats.TotalMevProfit, metrics.TotalMevProfit)
 	m.globalStats.TotalRefunded.Add(m.globalStats.TotalRefunded, metrics.TotalRefundable)
 	m.globalStats.UpdatedAt = time.Now()
 
-	if m.recorder != nil {
-		successRate := 0.0
-		if metrics.BundleCount > 0 {
-			successRate = float64(metrics.SuccessCount) / float64(metrics.BundleCount)
-		}
-
-		builderDistribution := make(map[string]int, len(metrics.BuilderDistribution))
-		for builder, count := range metrics.BuilderDistribution {
-			builderDistribution[builder] = count
-		}
-
-		if err := m.recorder.RecordBlockSummary(experiment.BlockSummaryEvent{
-			RecordedAt:          time.Now(),
-			BlockNumber:         metrics.BlockNumber,
-			Validator:           metrics.ValidatorAddress.Hex(),
-			BlockTimestamp:      metrics.Timestamp,
-			BundleCount:         metrics.BundleCount,
-			SuccessCount:        metrics.SuccessCount,
-			FailedCount:         metrics.FailedCount,
-			SuccessRate:         successRate,
-			TotalMevProfitWei:   metrics.TotalMevProfit.String(),
-			TotalRefundableWei:  metrics.TotalRefundable.String(),
-			TotalGasUsed:        metrics.TotalGasUsed,
-			MevGasPriceWei:      metrics.MevGasPrice.String(),
-			BlockSpaceUsed:      metrics.BlockSpaceUsed,
-			UniqueBuilders:      len(metrics.BuilderDistribution),
-			BuilderDistribution: builderDistribution,
-		}); err != nil {
-			logging.Logger.Warn().Err(err).Uint64("blockNumber", metrics.BlockNumber).Msg("Failed to record block summary")
-		}
+	successRate := 0.0
+	if metrics.BundleCount > 0 {
+		successRate = float64(metrics.SuccessCount) / float64(metrics.BundleCount)
 	}
+
+	builderDistribution := make(map[string]int, len(metrics.BuilderDistribution))
+	for builder, count := range metrics.BuilderDistribution {
+		builderDistribution[builder] = count
+	}
+
+	return &BlockSummaryEvent{
+		RecordedAt:          time.Now(),
+		BlockNumber:         metrics.BlockNumber,
+		Validator:           metrics.ValidatorAddress.Hex(),
+		BlockTimestamp:      metrics.Timestamp,
+		BundleCount:         metrics.BundleCount,
+		SuccessCount:        metrics.SuccessCount,
+		FailedCount:         metrics.FailedCount,
+		SuccessRate:         successRate,
+		TotalMevProfitWei:   metrics.TotalMevProfit.String(),
+		TotalRefundableWei:  metrics.TotalRefundable.String(),
+		TotalGasUsed:        metrics.TotalGasUsed,
+		MevGasPriceWei:      metrics.MevGasPrice.String(),
+		BlockSpaceUsed:      metrics.BlockSpaceUsed,
+		UniqueBuilders:      len(metrics.BuilderDistribution),
+		BuilderDistribution: builderDistribution,
+	}, true
 }
 
-// RecordBundleResult 记录 bundle 执行结果
 func (m *MetricsStore) RecordBundleResult(blockNumber uint64, result *types.SimMevBundleResponse, builder string, searcher common.Address) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// 更新区块指标
 	if block, exists := m.blockMetrics[blockNumber]; exists {
-		block.AddBundleResult(result, builder)
+		block.addBundleResult(result, builder)
 	}
 
-	// 更新搜索者指标
 	m.updateSearcherMetrics(searcher, result)
 }
 
-// updateSearcherMetrics 更新搜索者指标
 func (m *MetricsStore) updateSearcherMetrics(searcher common.Address, result *types.SimMevBundleResponse) {
 	sm, exists := m.searcherMetrics[searcher]
 	if !exists {
@@ -167,7 +133,6 @@ func (m *MetricsStore) updateSearcherMetrics(searcher common.Address, result *ty
 		profit := result.Profit.ToInt()
 		sm.TotalProfit.Add(sm.TotalProfit, profit)
 
-		// 更新平均利润
 		if sm.TotalBundles > 0 {
 			sm.AvgProfit = new(big.Int).Div(sm.TotalProfit, big.NewInt(int64(sm.TotalBundles)))
 		}
@@ -180,7 +145,6 @@ func (m *MetricsStore) updateSearcherMetrics(searcher common.Address, result *ty
 	}
 }
 
-// GetBlockMetrics 获取区块指标
 func (m *MetricsStore) GetBlockMetrics(blockNumber uint64) (*BlockMevMetrics, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -189,7 +153,6 @@ func (m *MetricsStore) GetBlockMetrics(blockNumber uint64) (*BlockMevMetrics, bo
 	return metrics, exists
 }
 
-// GetValidatorMetrics 获取 Validator 指标
 func (m *MetricsStore) GetValidatorMetrics(address common.Address) (*ValidatorMetrics, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -198,12 +161,10 @@ func (m *MetricsStore) GetValidatorMetrics(address common.Address) (*ValidatorMe
 	return metrics, exists
 }
 
-// GetAllValidatorMetrics 获取所有 Validator 指标
 func (m *MetricsStore) GetAllValidatorMetrics() map[common.Address]*ValidatorMetrics {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	// 返回副本
 	result := make(map[common.Address]*ValidatorMetrics, len(m.validatorMetrics))
 	for k, v := range m.validatorMetrics {
 		result[k] = v
@@ -211,7 +172,6 @@ func (m *MetricsStore) GetAllValidatorMetrics() map[common.Address]*ValidatorMet
 	return result
 }
 
-// GetSearcherMetrics 获取搜索者指标
 func (m *MetricsStore) GetSearcherMetrics(address common.Address) (*SearcherMetrics, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -220,7 +180,6 @@ func (m *MetricsStore) GetSearcherMetrics(address common.Address) (*SearcherMetr
 	return metrics, exists
 }
 
-// GetAllSearcherMetrics 获取所有搜索者指标
 func (m *MetricsStore) GetAllSearcherMetrics() map[common.Address]*SearcherMetrics {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -232,12 +191,10 @@ func (m *MetricsStore) GetAllSearcherMetrics() map[common.Address]*SearcherMetri
 	return result
 }
 
-// GetGlobalMetrics 获取全局统计
 func (m *MetricsStore) GetGlobalMetrics() *GlobalMetrics {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	// 返回副本
 	return &GlobalMetrics{
 		TotalBlocks:      m.globalStats.TotalBlocks,
 		TotalBundles:     m.globalStats.TotalBundles,
@@ -250,7 +207,6 @@ func (m *MetricsStore) GetGlobalMetrics() *GlobalMetrics {
 	}
 }
 
-// GetRecentBlocks 获取最近 N 个区块的指标
 func (m *MetricsStore) GetRecentBlocks(n int) []*BlockMevMetrics {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -259,15 +215,8 @@ func (m *MetricsStore) GetRecentBlocks(n int) []*BlockMevMetrics {
 		return nil
 	}
 
-	// 找到最新的 N 个区块
-	var blocks []*BlockMevMetrics
-	for _, metrics := range m.blockMetrics {
-		blocks = append(blocks, metrics)
-	}
-
-	// 按区块号排序并取最新的 N 个
-	if len(blocks) < n {
-		n = len(blocks)
+	if len(m.blockMetrics) < n {
+		n = len(m.blockMetrics)
 	}
 
 	result := make([]*BlockMevMetrics, 0, n)
@@ -280,7 +229,6 @@ func (m *MetricsStore) GetRecentBlocks(n int) []*BlockMevMetrics {
 	return result
 }
 
-// CleanupOldBlocks 清理旧区块数据
 func (m *MetricsStore) CleanupOldBlocks(keepBlocks uint64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -297,7 +245,6 @@ func (m *MetricsStore) CleanupOldBlocks(keepBlocks uint64) {
 	}
 }
 
-// weightedAverage 计算加权平均
 func weightedAverage(current *big.Int, newVal *big.Int, currentWeight, newWeight int64) *big.Int {
 	if currentWeight == 0 {
 		return new(big.Int).Set(newVal)

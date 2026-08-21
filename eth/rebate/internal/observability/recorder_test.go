@@ -1,4 +1,4 @@
-package experiment
+package observability
 
 import (
 	"os"
@@ -8,11 +8,11 @@ import (
 	"time"
 )
 
-func TestRecorderWritesJSONLFiles(t *testing.T) {
+func TestExperimentRecorderWritesJSONLFiles(t *testing.T) {
 	dir := t.TempDir()
-	recorder, err := NewRecorder(dir)
+	recorder, err := NewExperimentRecorder(dir)
 	if err != nil {
-		t.Fatalf("NewRecorder: %v", err)
+		t.Fatalf("NewExperimentRecorder: %v", err)
 	}
 	defer recorder.Close()
 

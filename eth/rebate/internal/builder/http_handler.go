@@ -4,15 +4,15 @@ import (
 	"encoding/json"
 	"math/big"
 	"net/http"
-	"rebate/internal/experiment"
 	"rebate/internal/logging"
+	"rebate/internal/observability"
 	"time"
 )
 
 type HTTPHandler struct {
-	registry *Registry
-	strategy StrategyConfig
-	recorder *experiment.Recorder
+	registry  *Registry
+	strategy  StrategyConfig
+	telemetry *observability.Service
 }
 
 type ObserveBuilderRequest struct {
@@ -42,12 +42,12 @@ type BuilderScoreView struct {
 	ExplorationCandidate bool         `json:"explorationCandidate"`
 }
 
-func NewHTTPHandler(registry *Registry, strategy StrategyConfig, recorders ...*experiment.Recorder) *HTTPHandler {
-	var recorder *experiment.Recorder
-	if len(recorders) > 0 {
-		recorder = recorders[0]
+func NewHTTPHandler(registry *Registry, strategy StrategyConfig, telemetryServices ...*observability.Service) *HTTPHandler {
+	var telemetry *observability.Service
+	if len(telemetryServices) > 0 {
+		telemetry = telemetryServices[0]
 	}
-	return &HTTPHandler{registry: registry, strategy: normalizeStrategyConfig(strategy), recorder: recorder}
+	return &HTTPHandler{registry: registry, strategy: normalizeStrategyConfig(strategy), telemetry: telemetry}
 }
 
 func (h *HTTPHandler) GetScores(w http.ResponseWriter, r *http.Request) {
@@ -157,8 +157,8 @@ func (h *HTTPHandler) ObserveBuilder(w http.ResponseWriter, r *http.Request) {
 		Float64("last_reward", builder.Stats.LastReward).
 		Float64("effective_score", builder.Score).
 		Msg("builder observation recorded")
-	if h.recorder != nil {
-		recordErr := h.recorder.RecordBuilderSnapshot(experiment.BuilderSnapshotEvent{
+	if h.telemetry != nil {
+		h.telemetry.RecordBuilderSnapshot(observability.BuilderSnapshotEvent{
 			RecordedAt:        time.Now(),
 			BlockNumber:       req.BlockNumber,
 			Source:            "manual_observation",
@@ -175,9 +175,6 @@ func (h *HTTPHandler) ObserveBuilder(w http.ResponseWriter, r *http.Request) {
 			AverageReward:     builder.Stats.AverageReward,
 			LastReward:        builder.Stats.LastReward,
 		})
-		if recordErr != nil {
-			logging.Logger.Warn().Err(recordErr).Msg("Failed to record manual builder snapshot")
-		}
 	}
 
 	writeJSON(w, http.StatusOK, BuilderScoreView{

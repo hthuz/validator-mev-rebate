@@ -90,10 +90,12 @@
 │             │                   │                    └──────────────────────────┘              │
 │             │                   │                                                               │
 │             │                   ▼                                                               │
-│             │        ┌──────────────────────┐       ┌──────────────────────────┐              │
-│             └───────▶│ MetricsStore          ├──────▶│ ExperimentRecorder        │              │
-│                      │ block/validator/searcher│     │ metadata + JSONL files   │              │
-│                      └──────────────────────┘       └──────────────────────────┘              │
+│             │        ┌──────────────────────────────────────────────────────┐                  │
+│             └───────▶│ ObservabilityService                                  │                  │
+│                      │ - MetricsStore: block/validator/searcher/global        │                  │
+│                      │ - ExperimentRecorder: metadata + JSONL files           │                  │
+│                      │ - MetricsHandler: HTTP /metrics/*                     │                  │
+│                      └──────────────────────────────────────────────────────┘                  │
 └───────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -160,7 +162,7 @@ Replay simulator 是本项目的核心技术模块之一。与用于长周期压
 `server` 作为系统中心节点，负责：
 
 1. 加载 YAML 配置，并根据 `simulator.mode` 初始化 replay 或 mock simulator；
-2. 初始化 signer、queue、bundle store、metrics store、experiment recorder、builder registry 和 dispatcher；
+2. 初始化 signer、queue、bundle store、observability service、builder registry 和 dispatcher；
 3. 按 `simulator.workers` 启动多个 simulation worker；
 4. 如果配置了 `mock_builders`，在本进程内启动 mock builder HTTP 节点；
 5. 对外暴露 JSON-RPC、SSE、builder 管理和 metrics 接口；
@@ -172,8 +174,8 @@ Simulation worker 的流程是：
 
 1. 从模拟队列中取出 bundle；
 2. 调用当前配置的 simulator 执行模拟；
-3. 根据模拟结果更新 block / validator / searcher metrics；
-4. 将 bundle simulation event 写入实验 JSONL；
+3. 通过 `ObservabilityService` 更新 block / validator / searcher metrics；
+4. 通过 `ObservabilityService` 将 bundle simulation event 写入实验 JSONL；
 5. 若成功则生成 matching hash、广播 hint、存储结果；
 6. 将 bundle 交给 builder dispatcher；
 7. dispatcher 选择 target producer、发送 bundle、记录 dispatch event；
@@ -216,14 +218,15 @@ Simulation worker 的流程是：
         │ simulation result
         ▼
 ┌──────────────────────────────┐
-│ MetricsStore                  │
-│ update block / validator      │
-│ / searcher metrics            │
+│ ObservabilityService          │
+│ update MetricsStore           │
+│ block/validator/searcher      │
 └───────┬──────────────────────┘
         │ RecordBundleSimulation
         ▼
 ┌──────────────────────────────┐
-│ ExperimentRecorder            │
+│ ExperimentRecorder inside     │
+│ observability module          │
 │ bundle_events.jsonl           │
 └───────┬──────────────────────┘
         │
@@ -268,12 +271,20 @@ Simulation worker 的流程是：
         │ RecordBuilderSnapshot
         ▼
 ┌──────────────────────┐
-│ ExperimentRecorder    │
+│ ObservabilityService  │
 │ builder_dispatches    │
 │ builder_snapshots     │
 │ block_summary         │
 └──────────────────────┘
 ```
+
+观测模块实现位于：
+
+- [internal/observability/service.go](file:///Users/bytedance/validator-mev-rebate/eth/rebate/internal/observability/service.go)
+- [internal/observability/store.go](file:///Users/bytedance/validator-mev-rebate/eth/rebate/internal/observability/store.go)
+- [internal/observability/recorder.go](file:///Users/bytedance/validator-mev-rebate/eth/rebate/internal/observability/recorder.go)
+- [internal/observability/handler.go](file:///Users/bytedance/validator-mev-rebate/eth/rebate/internal/observability/handler.go)
+- [internal/observability/types.go](file:///Users/bytedance/validator-mev-rebate/eth/rebate/internal/observability/types.go)
 
 服务端对外接口与当前实现对应如下：
 

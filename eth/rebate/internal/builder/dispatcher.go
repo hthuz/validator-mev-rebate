@@ -10,8 +10,8 @@ import (
 	"math/rand"
 	"net/http"
 	"rebate/config"
-	"rebate/internal/experiment"
 	"rebate/internal/logging"
+	"rebate/internal/observability"
 	"rebate/pkg/types"
 	"sync"
 	"time"
@@ -88,17 +88,17 @@ type Dispatcher struct {
 	log         *DispatchLog
 	rng         *rand.Rand
 	strategy    StrategyConfig
-	recorder    *experiment.Recorder
+	telemetry   *observability.Service
 	mu          sync.Mutex // 保护 rng
 	layerMu     sync.Mutex // 保护交替模式的层选择状态
 	nextExplore bool
 }
 
 // NewDispatcher 创建分发器
-func NewDispatcher(registry *Registry, strategy StrategyConfig, recorders ...*experiment.Recorder) *Dispatcher {
-	var recorder *experiment.Recorder
-	if len(recorders) > 0 {
-		recorder = recorders[0]
+func NewDispatcher(registry *Registry, strategy StrategyConfig, telemetryServices ...*observability.Service) *Dispatcher {
+	var telemetry *observability.Service
+	if len(telemetryServices) > 0 {
+		telemetry = telemetryServices[0]
 	}
 	return &Dispatcher{
 		registry:    registry,
@@ -106,7 +106,7 @@ func NewDispatcher(registry *Registry, strategy StrategyConfig, recorders ...*ex
 		rng:         rand.New(rand.NewSource(time.Now().UnixNano())),
 		strategy:    normalizeStrategyConfig(strategy),
 		nextExplore: true,
-		recorder:    recorder,
+		telemetry:   telemetry,
 	}
 }
 
@@ -209,8 +209,8 @@ func (d *Dispatcher) Dispatch(ctx context.Context, bundle *types.SendMevBundleAr
 			Msg("builder dispatch succeeded")
 	}
 
-	if d.recorder != nil {
-		recordErr := d.recorder.RecordBuilderDispatch(experiment.BuilderDispatchEvent{
+	if d.telemetry != nil {
+		d.telemetry.RecordDispatch(observability.BuilderDispatchEvent{
 			RecordedAt:            time.Now(),
 			BundleHash:            bundleHash.Hex(),
 			TargetBlock:           uint64(bundle.Inclusion.BlockNumber),
@@ -229,9 +229,6 @@ func (d *Dispatcher) Dispatch(ctx context.Context, bundle *types.SendMevBundleAr
 			BundleRefundableWei:   result.RefundableValue.ToInt().String(),
 			BundleGasUsed:         uint64(result.GasUsed),
 		})
-		if recordErr != nil {
-			logging.Logger.Warn().Err(recordErr).Msg("Failed to record builder dispatch event")
-		}
 	}
 
 	observation := BuilderObservation{
@@ -271,8 +268,8 @@ func (d *Dispatcher) Dispatch(ctx context.Context, bundle *types.SendMevBundleAr
 			Float64("average_reward", updatedBuilder.Stats.AverageReward).
 			Float64("last_reward", updatedBuilder.Stats.LastReward).
 			Msg("builder score updated")
-		if d.recorder != nil {
-			recordErr := d.recorder.RecordBuilderSnapshot(experiment.BuilderSnapshotEvent{
+		if d.telemetry != nil {
+			d.telemetry.RecordBuilderSnapshot(observability.BuilderSnapshotEvent{
 				RecordedAt:        time.Now(),
 				BlockNumber:       uint64(bundle.Inclusion.BlockNumber),
 				Source:            "dispatch_observation",
@@ -289,9 +286,6 @@ func (d *Dispatcher) Dispatch(ctx context.Context, bundle *types.SendMevBundleAr
 				AverageReward:     updatedBuilder.Stats.AverageReward,
 				LastReward:        updatedBuilder.Stats.LastReward,
 			})
-			if recordErr != nil {
-				logging.Logger.Warn().Err(recordErr).Msg("Failed to record builder snapshot")
-			}
 		}
 	}
 	d.log.append(rec)

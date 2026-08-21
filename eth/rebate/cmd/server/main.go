@@ -11,9 +11,8 @@ import (
 	"rebate/config"
 	"rebate/internal/builder"
 	"rebate/internal/dataset"
-	"rebate/internal/experiment"
 	"rebate/internal/logging"
-	"rebate/internal/metrics"
+	"rebate/internal/observability"
 	"rebate/internal/queue"
 	"rebate/internal/sim"
 	"rebate/internal/sse"
@@ -55,16 +54,15 @@ func main() {
 	}
 	hintBroadcaster := sse.NewHub()
 	blockBroadcaster := sse.NewBlockHub()
-	experimentRecorder, err := experiment.NewRecorder(cfg.Reporting.ExperimentDir)
+	telemetry, err := observability.NewService(cfg.Reporting.ExperimentDir)
 	if err != nil {
-		logger.Fatal().Err(err).Str("dir", cfg.Reporting.ExperimentDir).Msg("Failed to initialize experiment recorder")
+		logger.Fatal().Err(err).Str("dir", cfg.Reporting.ExperimentDir).Msg("Failed to initialize observability service")
 	}
 	defer func() {
-		if closeErr := experimentRecorder.Close(); closeErr != nil {
-			logger.Error().Err(closeErr).Msg("Failed to close experiment recorder")
+		if closeErr := telemetry.Close(); closeErr != nil {
+			logger.Error().Err(closeErr).Msg("Failed to close observability service")
 		}
 	}()
-	metricsStore := metrics.NewMetricsStore(experimentRecorder)
 
 	// 4. 从配置创建 Builder Registry
 	registry := builder.NewRegistry()
@@ -74,7 +72,7 @@ func main() {
 		}
 	}
 	strategy := cfg.Dispatcher.Strategy
-	if err := experimentRecorder.WriteMetadata(map[string]any{
+	if err := telemetry.WriteMetadata(map[string]any{
 		"simulator": map[string]any{
 			"mode":                        cfg.Simulator.Mode,
 			"block_interval_seconds":      cfg.Simulator.BlockIntervalSeconds,
@@ -105,12 +103,12 @@ func main() {
 	}); err != nil {
 		logger.Warn().Err(err).Msg("Failed to write experiment metadata")
 	}
-	dispatcher := builder.NewDispatcher(registry, strategy, experimentRecorder)
-	builderHandler := builder.NewHTTPHandler(registry, strategy, experimentRecorder)
+	dispatcher := builder.NewDispatcher(registry, strategy, telemetry)
+	builderHandler := builder.NewHTTPHandler(registry, strategy, telemetry)
 
 	// 打印已注册的 builder 列表
 	logger.Info().Msg("=== Registered Builders ===")
-	logger.Info().Str("experimentDir", experimentRecorder.BaseDir()).Msg("Experiment recorder initialized")
+	logger.Info().Str("experimentDir", telemetry.BaseDir()).Msg("Observability service initialized")
 	logger.Info().
 		Bool("explorationEnabled", strategy.ExplorationEnabled).
 		Float64("explorationRate", strategy.ExplorationRate).
@@ -147,7 +145,7 @@ func main() {
 	// 7. 创建模拟工作器
 	workers := make([]*sim.SimulationWorker, 0, cfg.Simulator.Workers)
 	for i := 0; i < cfg.Simulator.Workers; i++ {
-		workers = append(workers, sim.NewSimulationWorker(simulator, simQueue, store, hintBroadcaster, signer, metricsStore, dispatcher, experimentRecorder))
+		workers = append(workers, sim.NewSimulationWorker(simulator, simQueue, store, hintBroadcaster, signer, telemetry, dispatcher))
 	}
 
 	// 8. 创建 HTTP 服务器
@@ -163,7 +161,7 @@ func main() {
 	mux.HandleFunc("/builders/register", builderHandler.RegisterBuilder)
 	mux.HandleFunc("/builders/observe", builderHandler.ObserveBuilder)
 
-	metricsHandler := metrics.NewMetricsHandler(metricsStore)
+	metricsHandler := observability.NewMetricsHandler(telemetry.Store())
 	mux.HandleFunc("/metrics/block/", metricsHandler.GetBlockMetrics)
 	mux.HandleFunc("/metrics/validator/", metricsHandler.GetValidatorMetrics)
 	mux.HandleFunc("/metrics/validators", metricsHandler.GetAllValidators)
@@ -200,7 +198,7 @@ func main() {
 			close(stopCh)
 		}
 	}
-	go blockUpdater(ctx, simulator, simQueue, metricsStore, blockBroadcaster, blockInterval, stopBlockNumber, requestStop)
+	go blockUpdater(ctx, simulator, simQueue, telemetry, blockBroadcaster, blockInterval, stopBlockNumber, requestStop)
 
 	go func() {
 		logger.Info().Str("addr", server.Addr).Msg("HTTP server listening")
@@ -288,7 +286,7 @@ func blockUpdater(
 	ctx context.Context,
 	backend sim.SimulationBackend,
 	queue *queue.SimulationQueue,
-	metrics *metrics.MetricsStore,
+	telemetry *observability.Service,
 	blockBroadcaster *sse.BlockHub,
 	blockInterval time.Duration,
 	stopBlockNumber uint64,
@@ -312,8 +310,8 @@ func blockUpdater(
 
 	advance := func() bool {
 		prevBlock := advancer.CurrentBlock()
-		if metrics != nil && prevBlock > 0 {
-			metrics.FinalizeBlock(prevBlock, advancer.BlockGasLimit())
+		if telemetry != nil && prevBlock > 0 {
+			telemetry.FinalizeBlock(prevBlock, advancer.BlockGasLimit())
 		}
 		if stopBlockNumber > 0 && prevBlock >= stopBlockNumber {
 			logger.Info().Uint64("block", prevBlock).Uint64("stopBlockNumber", stopBlockNumber).Msg("Reached configured stop block")
@@ -331,9 +329,9 @@ func blockUpdater(
 
 		queue.UpdateBlock(newBlock)
 
-		if metrics != nil {
+		if telemetry != nil {
 			validator := common.HexToAddress(validators[validatorIndex%len(validators)])
-			metrics.StartNewBlock(newBlock, validator)
+			telemetry.StartNewBlock(newBlock, validator)
 			validatorIndex++
 		}
 		if blockBroadcaster != nil {
