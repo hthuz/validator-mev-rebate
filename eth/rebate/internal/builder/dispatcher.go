@@ -13,6 +13,7 @@ import (
 	"rebate/internal/logging"
 	"rebate/internal/observability"
 	"rebate/pkg/types"
+	"rebate/pkg/utils"
 	"sync"
 	"time"
 
@@ -425,7 +426,7 @@ func (d *Dispatcher) expectedReward(builder *BuilderInfo) float64 {
 	}
 
 	reputationComponent := math.Max(builder.Score, minEffectiveScore)
-	rewardMean := clamp(builder.Stats.AverageReward, minObservedReward, maxObservedReward)
+	rewardMean := utils.Clamp(builder.Stats.AverageReward, minObservedReward, maxObservedReward)
 	rewardMultiplier := 1 + rewardMean
 	if rewardMultiplier < 0.10 {
 		rewardMultiplier = 0.10

@@ -5,6 +5,7 @@ import (
 	"math"
 	"math/big"
 	"net/http"
+	"rebate/pkg/utils"
 	"sync"
 	"time"
 )
@@ -261,27 +262,27 @@ func computeEffectiveScoreWithCompetition(
 	if builder.Stats.DispatchAttempts > 0 {
 		successRate = float64(builder.Stats.DispatchSuccesses) / float64(builder.Stats.DispatchAttempts)
 	}
-	reliabilityFactor := clamp(0.5+successRate, 0.35, 1.50)
+	reliabilityFactor := utils.Clamp(0.5+successRate, 0.35, 1.50)
 
-	failureFactor := clamp(1.0-consecutiveFailurePenalty*float64(builder.Stats.ConsecutiveFailures), 0.40, 1.0)
-	sandwichFactor := clamp(1.0-sandwichPenaltyPerEvent*float64(builder.Stats.SandwichAttacks), 0.10, 1.0)
-	wellBehavedFactor := clamp(1.0+wellBehavedBonusPerEvent*float64(builder.Stats.WellBehavedEvents), 1.0, 1.5)
-	valueFactor := 1.0 + clamp(valueReward(builder.totalValueWei), 0, maxValueReward)
+	failureFactor := utils.Clamp(1.0-consecutiveFailurePenalty*float64(builder.Stats.ConsecutiveFailures), 0.40, 1.0)
+	sandwichFactor := utils.Clamp(1.0-sandwichPenaltyPerEvent*float64(builder.Stats.SandwichAttacks), 0.10, 1.0)
+	wellBehavedFactor := utils.Clamp(1.0+wellBehavedBonusPerEvent*float64(builder.Stats.WellBehavedEvents), 1.0, 1.5)
+	valueFactor := 1.0 + utils.Clamp(valueReward(builder.totalValueWei), 0, maxValueReward)
 
 	targetScore := base * reliabilityFactor * failureFactor * sandwichFactor * wellBehavedFactor * valueFactor
-	targetScore = clamp(targetScore, minEffectiveScore, maxEffectiveScore)
+	targetScore = utils.Clamp(targetScore, minEffectiveScore, maxEffectiveScore)
 	targetScore = math.Min(targetScore, base+maxScoreUplift)
 	targetScore *= competitionFactor(builder, totalAttempts, builderCount, maxAverageReward)
 
 	currentScore := builder.Score
 	if currentScore <= 0 {
-		currentScore = clamp(base, minEffectiveScore, maxEffectiveScore)
+		currentScore = utils.Clamp(base, minEffectiveScore, maxEffectiveScore)
 	}
 	rate := scoreIncreaseRate
 	if targetScore < currentScore {
 		rate = scoreDecreaseRate
 	}
-	return clamp(currentScore+(targetScore-currentScore)*rate, minEffectiveScore, maxEffectiveScore)
+	return utils.Clamp(currentScore+(targetScore-currentScore)*rate, minEffectiveScore, maxEffectiveScore)
 }
 
 func competitionFactor(
@@ -303,10 +304,10 @@ func competitionFactor(
 
 	relativeRewardPenalty := 0.0
 	if maxAverageReward > 0 && builder.Stats.AverageReward < maxAverageReward {
-		relativeRewardPenalty = (1.0 - clamp(builder.Stats.AverageReward/maxAverageReward, 0, 1)) * relativeRewardPenaltyRate
+		relativeRewardPenalty = (1.0 - utils.Clamp(builder.Stats.AverageReward/maxAverageReward, 0, 1)) * relativeRewardPenaltyRate
 	}
 
-	return 1.0 - clamp(
+	return 1.0 - utils.Clamp(
 		concentrationPenalty+relativeRewardPenalty,
 		0,
 		maxCompetitionPenalty,
@@ -315,7 +316,7 @@ func competitionFactor(
 
 func computeReward(observation BuilderObservation) float64 {
 	if observation.Reward != nil {
-		return clamp(*observation.Reward, minObservedReward, maxObservedReward)
+		return utils.Clamp(*observation.Reward, minObservedReward, maxObservedReward)
 	}
 
 	successRate := 0.0
@@ -326,8 +327,8 @@ func computeReward(observation BuilderObservation) float64 {
 		failureRate = float64(failures) / float64(observation.DispatchAttempts)
 	}
 
-	valueComponent := clamp(valueReward(observation.ValueCreatedWei), 0, maxValueReward)
-	wellBehavedComponent := clamp(float64(observation.WellBehavedEvents)*wellBehavedBonusPerEvent, 0, 0.50)
+	valueComponent := utils.Clamp(valueReward(observation.ValueCreatedWei), 0, maxValueReward)
+	wellBehavedComponent := utils.Clamp(float64(observation.WellBehavedEvents)*wellBehavedBonusPerEvent, 0, 0.50)
 	sandwichPenalty := float64(observation.SandwichAttacks) * rewardSandwichWeight
 
 	reward := rewardSuccessWeight*successRate +
@@ -336,7 +337,7 @@ func computeReward(observation BuilderObservation) float64 {
 		rewardFailureWeight*failureRate -
 		sandwichPenalty
 
-	return clamp(reward, minObservedReward, maxObservedReward)
+	return utils.Clamp(reward, minObservedReward, maxObservedReward)
 }
 
 func valueReward(valueWei *big.Int) float64 {
@@ -346,14 +347,4 @@ func valueReward(valueWei *big.Int) float64 {
 
 	ethValue, _ := new(big.Float).Quo(new(big.Float).SetInt(valueWei), big.NewFloat(1e18)).Float64()
 	return math.Log10(1+ethValue) * 0.20
-}
-
-func clamp(value, min, max float64) float64 {
-	if value < min {
-		return min
-	}
-	if value > max {
-		return max
-	}
-	return value
 }
