@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/custom-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
+  <property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="2" name="_AdHocReviewCycleID">
+    <vt:i4>-857254979</vt:i4>
+  </property>
+  <property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="3" name="_EmailSubject">
+    <vt:lpwstr>关于专利&#x201C;一种蜂窝移动通信中实现寻呼的方法和系统&#x201D;</vt:lpwstr>
+  </property>
+  <property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="4" name="_AuthorEmail">
+    <vt:lpwstr>John_Lee@huawei.com</vt:lpwstr>
+  </property>
+  <property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="5" name="_AuthorEmailDisplayName">
+    <vt:lpwstr>John Lee</vt:lpwstr>
+  </property>
+  <property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="6" name="_PreviousAdHocReviewCycleID">
+    <vt:i4>1057501115</vt:i4>
+  </property>
+  <property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="7" name="_ReviewingToolsShownOnce">
+    <vt:lpwstr/>
+  </property>
+  <property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="8" name="KSOProductBuildVer">
+    <vt:lpwstr>1033-11.1.0.11723</vt:lpwstr>
+  </property>
+  <property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="9" name="ICV">
+    <vt:lpwstr>D35FEA2E4E644C03B1034657D40B774A_13</vt:lpwstr>
+  </property>
+  <property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="10" name="KSOTemplateDocerSaveRecord">
+    <vt:lpwstr>eyJoZGlkIjoiMTdlOWM4NjA0YzQ4MzI0YzA3YWQ5MzE0YzFhZWViZGYiLCJ1c2VySWQiOiIyNTI4NDAxMjYifQ==</vt:lpwstr>
+  </property>
+</Properties>

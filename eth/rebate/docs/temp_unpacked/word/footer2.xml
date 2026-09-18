@@ -1,0 +1,145 @@
+<?xml version="1.0" encoding="utf-8"?>
+<w:ftr xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:wp14="http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:w10="urn:schemas-microsoft-com:office:word" xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml" xmlns:wpg="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup" xmlns:wpi="http://schemas.microsoft.com/office/word/2010/wordprocessingInk" xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:wpsCustomData="http://www.wps.cn/officeDocument/2013/wpsCustomData" mc:Ignorable="w14 w15 wp14">
+  <w:p>
+    <w:pPr>
+      <w:pStyle w:val="14"/>
+      <w:jc w:val="center"/>
+    </w:pPr>
+    <w:r>
+      <mc:AlternateContent>
+        <mc:Choice Requires="wps">
+          <w:drawing>
+            <wp:anchor distT="0" distB="0" distL="114300" distR="114300" simplePos="0" relativeHeight="251660288" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1">
+              <wp:simplePos x="0" y="0"/>
+              <wp:positionH relativeFrom="margin">
+                <wp:align>center</wp:align>
+              </wp:positionH>
+              <wp:positionV relativeFrom="paragraph">
+                <wp:posOffset>0</wp:posOffset>
+              </wp:positionV>
+              <wp:extent cx="1828800" cy="1828800"/>
+              <wp:effectExtent l="0" t="0" r="0" b="0"/>
+              <wp:wrapNone/>
+              <wp:docPr id="3" name="文本框 1028"/>
+              <wp:cNvGraphicFramePr/>
+              <a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+                <a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">
+                  <wps:wsp>
+                    <wps:cNvSpPr txBox="1"/>
+                    <wps:spPr>
+                      <a:xfrm>
+                        <a:off x="0" y="0"/>
+                        <a:ext cx="1828800" cy="1828800"/>
+                      </a:xfrm>
+                      <a:prstGeom prst="rect">
+                        <a:avLst/>
+                      </a:prstGeom>
+                      <a:noFill/>
+                      <a:ln>
+                        <a:noFill/>
+                      </a:ln>
+                      <a:effectLst/>
+                    </wps:spPr>
+                    <wps:txbx>
+                      <w:txbxContent>
+                        <w:p>
+                          <w:pPr>
+                            <w:pStyle w:val="14"/>
+                            <w:jc w:val="center"/>
+                          </w:pPr>
+                          <w:r>
+                            <w:rPr>
+                              <w:rStyle w:val="21"/>
+                            </w:rPr>
+                            <w:fldChar w:fldCharType="begin"/>
+                          </w:r>
+                          <w:r>
+                            <w:rPr>
+                              <w:rStyle w:val="21"/>
+                            </w:rPr>
+                            <w:instrText xml:space="preserve"> PAGE </w:instrText>
+                          </w:r>
+                          <w:r>
+                            <w:rPr>
+                              <w:rStyle w:val="21"/>
+                            </w:rPr>
+                            <w:fldChar w:fldCharType="separate"/>
+                          </w:r>
+                          <w:r>
+                            <w:rPr>
+                              <w:rStyle w:val="21"/>
+                            </w:rPr>
+                            <w:t>1</w:t>
+                          </w:r>
+                          <w:r>
+                            <w:rPr>
+                              <w:rStyle w:val="21"/>
+                            </w:rPr>
+                            <w:fldChar w:fldCharType="end"/>
+                          </w:r>
+                        </w:p>
+                      </w:txbxContent>
+                    </wps:txbx>
+                    <wps:bodyPr wrap="none" lIns="0" tIns="0" rIns="0" bIns="0">
+                      <a:spAutoFit/>
+                    </wps:bodyPr>
+                  </wps:wsp>
+                </a:graphicData>
+              </a:graphic>
+            </wp:anchor>
+          </w:drawing>
+        </mc:Choice>
+        <mc:Fallback>
+          <w:pict>
+            <v:shape id="文本框 1028" o:spid="_x0000_s1026" o:spt="202" type="#_x0000_t202" style="position:absolute;left:0pt;margin-top:0pt;height:144pt;width:144pt;mso-position-horizontal:center;mso-position-horizontal-relative:margin;mso-wrap-style:none;z-index:251660288;mso-width-relative:page;mso-height-relative:page;" filled="f" stroked="f" coordsize="21600,21600" o:gfxdata="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&#10;">
+              <v:fill on="f" focussize="0,0"/>
+              <v:stroke on="f"/>
+              <v:imagedata o:title=""/>
+              <o:lock v:ext="edit" aspectratio="f"/>
+              <v:textbox inset="0mm,0mm,0mm,0mm" style="mso-fit-shape-to-text:t;">
+                <w:txbxContent>
+                  <w:p>
+                    <w:pPr>
+                      <w:pStyle w:val="14"/>
+                      <w:jc w:val="center"/>
+                    </w:pPr>
+                    <w:r>
+                      <w:rPr>
+                        <w:rStyle w:val="21"/>
+                      </w:rPr>
+                      <w:fldChar w:fldCharType="begin"/>
+                    </w:r>
+                    <w:r>
+                      <w:rPr>
+                        <w:rStyle w:val="21"/>
+                      </w:rPr>
+                      <w:instrText xml:space="preserve"> PAGE </w:instrText>
+                    </w:r>
+                    <w:r>
+                      <w:rPr>
+                        <w:rStyle w:val="21"/>
+                      </w:rPr>
+                      <w:fldChar w:fldCharType="separate"/>
+                    </w:r>
+                    <w:r>
+                      <w:rPr>
+                        <w:rStyle w:val="21"/>
+                      </w:rPr>
+                      <w:t>1</w:t>
+                    </w:r>
+                    <w:r>
+                      <w:rPr>
+                        <w:rStyle w:val="21"/>
+                      </w:rPr>
+                      <w:fldChar w:fldCharType="end"/>
+                    </w:r>
+                  </w:p>
+                </w:txbxContent>
+              </v:textbox>
+            </v:shape>
+          </w:pict>
+        </mc:Fallback>
+      </mc:AlternateContent>
+    </w:r>
+  </w:p>
+</w:ftr>
