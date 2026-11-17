@@ -1,0 +1,10 @@
+# Risk Assessment System
+
+node_modules/
+venv/
+__pycache__/
+*.pyc
+.env
+dist/
+build/
+*.log
