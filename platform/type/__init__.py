@@ -1,11 +1,16 @@
+"""Type module - 公共数据类型"""
 
+from .models import Transaction, SlotLeader, TransactionRecord
+from .staker import Stake, Staker
+from .validator import Validator, ValidatorStakewiz, ValidatorInfo
 
-from .staker import *
-from .validator import *
 __all__ = [
-    validator.Validator,
-    validator.ValidatorStakewiz,
-    validator,ValidatorInfo,
-    staker.Stake,
-    staker.Staker
+    'Transaction',
+    'SlotLeader',
+    'TransactionRecord',
+    'Validator',
+    'ValidatorStakewiz',
+    'ValidatorInfo',
+    'Stake',
+    'Staker',
 ]

@@ -15,7 +15,7 @@ platform_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')
 env_path = os.path.join(platform_dir, '.env')
 load_dotenv(env_path)
 
-from reader import Reader
+from platform.stake_reader import Reader
 from config import START_EPOCH, END_EPOCH
 
 app = Flask(__name__)

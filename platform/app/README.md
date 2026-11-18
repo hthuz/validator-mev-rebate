@@ -142,5 +142,5 @@ curl "http://localhost:5000/api/stats?epoch=800"
 - Real-time transaction data (fast channel)
 - Historical trend analysis
 - Alert system for validator anomalies
-- Advanced filtering and search capabilities
+- Advanced filtering cap and searchabilities
 - Export functionality for reports
