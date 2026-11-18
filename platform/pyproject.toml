@@ -1,16 +1,19 @@
 [project]
-name = "validator-mev-rebate"
+name = "platform"
 version = "0.1.0"
-description = "Validator MEV Rebate Platform - Sandwich attack detection and mitigation"
+description = "Solana platform"
 authors = [
     {name = "hthuz", email = "hthuz@example.com"}
 ]
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+    "clickhouse-connect>=1.13.0",
     "Flask>=2.3.0",
+    "flask-socketio>=5.7.2",
     "pandas>=2.0.0",
     "python-dotenv>=1.0.0",
+    "python-socketio>=5.18.1",
     "requests>=2.31.0",
 ]
 

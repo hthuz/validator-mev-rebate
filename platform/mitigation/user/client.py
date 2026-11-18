@@ -1,97 +1,129 @@
 """
-User module for simulating transaction sending by replaying historical blocks
+User module for simulating transaction sending by replaying historical blocks.
+
+新的 slot 机制：
+  - user 连接 server 后监听 new_slot 事件（事件名需与 server.py 保持一致）
+  - 收到广播里的 slot start time 后，从 BLOCKS_DATA 取该 slot 的交易
+  - 逐笔发送交易，最后发送 end 标识表示本 slot 交易全部发完
+  - 然后等待 server 的下一个 slot 广播
 """
-import os
 import json
 import time
 import requests
-from typing import List, Dict, Any, Optional
-from pathlib import Path
-from ...logger import user_logger as logger
+import socketio
+from typing import List, Dict, Any
+
+from config import SERVER_PORT, BLOCK_PATH
+from log import user_logger as logger
+from utils import build_block_time_index
+
+NEW_SLOT_EVENT = 'new_slot'
+SIMULATION_DONE_EVENT = 'simulation_done'
 
 
 class TransactionUser:
-    """模拟用户：从历史区块数据中重放交易"""
+    """模拟用户：根据 server 广播的 slot start time 重放区块交易"""
 
     def __init__(self, server_url: str, block_data_path: str):
         self.server_url = server_url.rstrip('/')
         self.block_data_path = block_data_path
-        self._blocks_data: Dict[int, List[Dict[str, Any]]] = {}
-        self._load_block_data()
 
-    def _load_block_data(self) -> None:
-        """从BLOCK_PATH加载区块数据"""
-        logger.info(f"加载区块数据: {self.block_data_path}")
+        # BLOCKS_DATA: slot start time -> 该 slot 的交易列表（按需加载并缓存）
+        self.BLOCKS_DATA: Dict[int, List[Dict[str, Any]]] = {}
+        # slot start time -> 对应的区块文件路径（轻量索引，只读文件头）
+        self._block_index = build_block_time_index(block_data_path)
 
-        if not os.path.exists(self.block_data_path):
-            logger.warning(f"区块数据路径不存在: {self.block_data_path}")
-            return
+        self._sio = socketio.Client(logger=False, engineio_logger=False)
+        self._running = False
+        self._register_socket_events()
 
-        # 遍历目录中的所有JSON文件
-        block_files = list(Path(self.block_data_path).glob("*.json"))
-        logger.info(f"找到 {len(block_files)} 个区块文件")
+        if self._block_index:
+            times = sorted(self._block_index)
+            logger.info(
+                f"加载区块索引完成: slot start time 范围 {times[0]}-{times[-1]}, "
+                f"共 {len(times)} 个 slot"
+            )
+        else:
+            logger.warning(f"区块数据路径无可用文件: {block_data_path}，将使用测试数据")
 
-        for block_file in block_files:
+    # ------------------------------------------------------------------
+    # Socket.IO 事件
+    # ------------------------------------------------------------------
+    def _register_socket_events(self) -> None:
+        @self._sio.on(NEW_SLOT_EVENT)
+        def on_new_slot(data: Dict[str, Any]):
+            slot = int(data['slot'])
+            logger.info(f"收到新 slot 广播 (start time): {slot}")
+            self._send_slot_transactions(slot)
+
+        @self._sio.on(SIMULATION_DONE_EVENT)
+        def on_simulation_done(data: Dict[str, Any]):
+            logger.info(f"服务器通知模拟结束: {data}")
+            self._running = False
+            self._sio.disconnect()
+
+    # ------------------------------------------------------------------
+    # 区块数据（按需加载）
+    # ------------------------------------------------------------------
+    def _generate_test_transactions(self, slot: int) -> List[Dict[str, Any]]:
+        """没有真实区块数据时的测试交易"""
+        return [
+            {
+                'signature': f'sig_{slot}_{i}',
+                'slot': slot,
+                'fee': 5000,
+                'status': 'success',
+            }
+            for i in range(5)
+        ]
+
+    def _get_transactions_for_slot(self, slot: int) -> List[Dict[str, Any]]:
+        """从 BLOCKS_DATA 获取指定 slot start time 的交易（首次访问时加载）"""
+        if slot in self.BLOCKS_DATA:
+            return self.BLOCKS_DATA[slot]
+
+        transactions: List[Dict[str, Any]] = []
+        for block_file in self._block_index.get(slot, []):
             try:
                 with open(block_file, 'r') as f:
                     block_data = json.load(f)
-
-                # 提取slot和交易信息
-                # 根据实际数据格式调整
-                slot = block_data.get('slot') or block_data.get('blockHeight')
-                transactions = block_data.get('transactions', [])
-
-                if slot is not None:
-                    self._blocks_data[int(slot)] = transactions
-                    logger.debug(f"加载slot {slot}: {len(transactions)} 笔交易")
-
+                transactions.extend(block_data.get('transactions', []))
             except Exception as e:
                 logger.warning(f"无法加载 {block_file}: {e}")
 
-        if self._blocks_data:
-            min_slot = min(self._blocks_data.keys())
-            max_slot = max(self._blocks_data.keys())
-            total_txs = sum(len(txs) for txs in self._blocks_data.values())
-            logger.info(f"加载完成: slot范围 {min_slot}-{max_slot}, 共 {total_txs} 笔交易")
-        else:
-            logger.warning("没有加载到任何区块数据，使用模拟数据")
-            # 生成一些测试数据
-            self._generate_test_data()
+        if not transactions and not self._block_index:
+            transactions = self._generate_test_transactions(slot)
 
-    def _generate_test_data(self) -> None:
-        """生成测试数据（当没有真实数据时）"""
-        logger.info("生成测试数据")
-        for slot in range(101, 110):
-            transactions = []
-            for i in range(5):  # 每个slot 5笔交易
-                transactions.append({
-                    'signature': f'sig_{slot}_{i}',
-                    'slot': slot,
-                    'fee': 5000,
-                    'status': 'success'
-                })
-            self._blocks_data[slot] = transactions
-        logger.info(f"生成了 {len(self._blocks_data)} 个slot的测试数据")
+        self.BLOCKS_DATA[slot] = transactions
+        logger.debug(f"slot {slot}: 从 BLOCKS_DATA 加载 {len(transactions)} 笔交易")
+        return transactions
 
-    def send_transaction(self, tx_data: Dict[str, Any]) -> bool:
-        """发送单个交易到服务器"""
+    def get_available_blocks(self) -> List[int]:
+        """获取所有可用的 slot start time"""
+        return sorted(self._block_index.keys())
+
+    # ------------------------------------------------------------------
+    # 发送交易
+    # ------------------------------------------------------------------
+    def send_transaction(self, tx_data: Dict[str, Any], slot: int) -> bool:
+        """发送单笔交易到服务器"""
         try:
-            url = f"{self.server_url}/sendTransaction"
-
-            # 构造交易数据
             payload = {
-                'tx_id': tx_data.get('signature', f"tx_{time.time()}"),
-                'slot': tx_data['slot'],
+                'tx_id': tx_data.get('signature', f"tx_{slot}_{time.time()}"),
+                'slot': slot,
                 'signature': tx_data.get('signature', ''),
                 'fee': tx_data.get('fee', 0),
                 'status': tx_data.get('status', 'unknown'),
-                'raw_data': tx_data
+                'end': False,
+                'raw_data': tx_data,
             }
 
-            response = requests.post(url, json=payload, timeout=5)
+            response = requests.post(
+                f"{self.server_url}/sendTransaction", json=payload, timeout=30
+            )
 
             if response.status_code == 200:
-                logger.info(f"✓ 发送交易成功: {payload['tx_id']}, slot: {payload['slot']}")
+                logger.info(f"✓ 发送交易成功: {payload['tx_id']}, slot: {slot}")
                 return True
             else:
                 logger.error(f"✗ 发送交易失败: {response.status_code}, {response.text}")
@@ -101,86 +133,64 @@ class TransactionUser:
             logger.error(f"✗ 发送交易异常: {e}")
             return False
 
-    def replay_slot(self, current_server_slot: int, send_block_slot: int) -> int:
-        """
-        当服务器处于current_server_slot时，发送send_block_slot的所有交易
-
-        Args:
-            current_server_slot: 服务器当前的slot号
-            send_block_slot: 要发送的区块的slot号
-
-        Returns:
-            成功发送的交易数量
-        """
-        transactions = self._blocks_data.get(send_block_slot, [])
-
-        if not transactions:
-            return 0
-
-        logger.info(f"服务器slot {current_server_slot}: 发送区块 {send_block_slot} 的 {len(transactions)} 笔交易")
-
-        success_count = 0
-        for tx in transactions:
-            if self.send_transaction(tx):
-                success_count += 1
-            time.sleep(0.01)  # 短暂延迟，避免过快
-
-        return success_count
-
-    def get_available_blocks(self) -> List[int]:
-        """获取所有可用的区块slot"""
-        return sorted(self._blocks_data.keys())
-
-    def run_simulation(self, start_slot: int = None, delay: float = 0.4):
-        """
-        运行完整的模拟：
-        - 当服务器在slot N时，发送区块 N+1 的交易
-        """
-        available_blocks = self.get_available_blocks()
-
-        if not available_blocks:
-            logger.warning("没有可用的区块数据")
-            return
-
-        if start_slot is None:
-            start_slot = min(available_blocks) - 1
-
-        logger.info(f"开始模拟，起始slot: {start_slot}")
-        logger.info(f"可用区块范围: {min(available_blocks)} - {max(available_blocks)}")
-
-        current_slot = start_slot
-
+    def send_end(self, slot: int) -> bool:
+        """发送 end 标识，告诉 server 该 slot 的交易已全部发完"""
         try:
-            while True:
-                # 当前slot模拟
-                send_block = current_slot + 1
+            response = requests.post(
+                f"{self.server_url}/sendTransaction",
+                json={'slot': slot, 'end': True},
+                timeout=30,
+            )
+            if response.status_code == 200:
+                logger.info(f"✓ slot {slot} 交易发送结束，已发送 end 标识")
+                return True
+            else:
+                logger.error(f"✗ 发送 end 标识失败: {response.status_code}, {response.text}")
+                return False
+        except Exception as e:
+            logger.error(f"✗ 发送 end 标识异常: {e}")
+            return False
 
-                if send_block in self._blocks_data:
-                    self.replay_slot(current_slot, send_block)
+    def _send_slot_transactions(self, slot: int) -> None:
+        """把某个 slot 的全部交易发给 server，然后发 end 标识"""
+        transactions = self._get_transactions_for_slot(slot)
+        logger.info(f"slot {slot}: 发送 {len(transactions)} 笔交易")
 
-                # 推进到下一个slot
-                current_slot += 1
-                time.sleep(delay)
+        for tx in transactions:
+            self.send_transaction(tx, slot)
 
-                # 如果超出范围，结束
-                if current_slot > max(available_blocks):
-                    logger.info(f"模拟完成，已到达最后的slot {max(available_blocks)}")
-                    break
+        self.send_end(slot)
 
-        except KeyboardInterrupt:
-            logger.info("模拟被用户中断")
+    # ------------------------------------------------------------------
+    # 运行
+    # ------------------------------------------------------------------
+    def run(self) -> None:
+        """连接服务器，之后完全由服务器广播驱动"""
+        self._running = True
+        logger.info(f"连接服务器: {self.server_url}")
+        self._sio.connect(self.server_url)
+        self._sio.wait()
+
+    def stop(self) -> None:
+        """停止用户客户端"""
+        self._running = False
+        if self._sio.connected:
+            self._sio.disconnect()
 
 
-def create_user(server_url: str = "http://localhost:8080", block_data_path: str = None) -> TransactionUser:
+def create_user(
+    server_url: str = None, block_data_path: str = None
+) -> TransactionUser:
     """工厂函数：创建用户实例"""
+    if server_url is None:
+        server_url = f"http://localhost:{SERVER_PORT}"
     if block_data_path is None:
-        from ..config import BLOCK_PATH
         block_data_path = BLOCK_PATH
 
     return TransactionUser(server_url, block_data_path)
 
 
 if __name__ == "__main__":
-    # 测试用例
     user = create_user()
-    logger.info(f"可用区块: {user.get_available_blocks()}")
+    logger.info(f"可用区块: {user.get_available_blocks()[:5]} ...")
+    user.run()

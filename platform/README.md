@@ -1,6 +1,6 @@
-# Validator MEV Rebate Platform
+# Validator MEV Platform
 
-一个用于Solana验证者MEV回扣的综合平台，包含sandwich攻击检测和缓解策略研究。
+一个用于Solana验证者MEV的综合平台，包含sandwich攻击检测和缓解策略研究。
 
 ## 项目结构
 

@@ -15,4 +15,6 @@ __all__ = [
     'SlotInfo',
     'get_sandwich_info',
     'obj_to_dict',
+    'build_block_time_index',
+    'extract_slot_from_block_path',
 ]
