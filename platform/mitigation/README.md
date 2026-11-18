@@ -6,41 +6,46 @@ Mitigation模块是一个模拟交易发送策略的平台，用于研究和测�
 
 ## Slot 机制（事件驱动）
 
-**slot 统一用 slot start time 表示**，即区块的 `blockTime`（Unix 秒时间戳），不再是 slot 序号。同一秒内产生的多个区块归为同一个模拟 slot。
+**slot 就是 slot 号（等于 block 号，整数），跟 blockTime/timestamp 没有任何关系。** 真实链上 400ms 一个 slot，但这里是历史交易回放模拟——一个 slot 的交易处理完就跳到下一个 slot，与时间无关。
 
-整条链路没有定时器，完全由事件驱动：
+server 记录的 slot 表示「user 需要发送这个 slot 的交易」。整条链路没有定时器，完全由事件驱动：
 
 ```
-1. server 进入新 slot
-       ↓  Socket.IO 广播 new_slot {slot: start_time}
+1. server 进入新 slot（从 START_SLOT 开始，每次 +1）
+       ↓  Socket.IO 广播 new_slot {slot, leader}
 2. user 收到广播，从 BLOCKS_DATA 取该 slot 的交易
        ↓  逐笔 POST /sendTransaction
 3. server 收到交易后立即按当前策略处理
    （immediate 策略：收到就立刻发给验证者，不等 slot 推进）
-       ↓  user 发 end 标识：{"slot": start_time, "end": true}
-4. server 收到 end → 处理收尾交易 → 推进到下一个 slot → 回到 1
+       ↓  user 发 end 标识：{"slot": slot, "end": true}
+4. server 收到 end → 处理收尾交易
+       ↓  非 debug：直接推进 / debug：等手动确认（Enter 或 POST /slot/advance）
+5. 推进到下一个 slot（slot + 1）→ 回到 1
 ```
 
 关键点：
-- **不再 sleep 固定时间后推进 slot**，收到 `end` 才推进。
+- **slot 就是 slot 号**，从 `START_SLOT` 起每次固定 +1，与 blockTime 无关。
+- **不再 sleep 固定时间后推进 slot**，收到 `end` 且处理完交易才推进。
 - **immediate 策略在收到交易时就发给验证者**，不用等到 slot 推进。
 - 非当前 slot 的 `end` 标识会被忽略。
+- **Debug 模式多一道确认**：即使收到 `end` 并处理完交易，也必须按 Enter 或调 `POST /slot/advance` 才会推进。
 
 ## 功能特性
 
 - **交易接收与管理**: 通过HTTP API接收用户交易
-- **Slot模拟**: 基于 slot start time 的事件驱动 slot 推进
+- **Slot模拟**: 基于 slot 号的事件驱动 slot 推进
 - **多策略支持**:
   - ImmediateStrategy: 收到交易立即发送
   - DelayedStrategy: 延迟 N 个 slot 发送
 - **Socket.IO 广播**: server 进入新 slot 时广播给 user
+- **Debug 模式**: 手动确认 slot 推进，便于逐步调试
 
 ## 架构
 
 ```
 mitigation/
 ├── server.py               # Flask + Socket.IO 服务器
-├── slot_manager.py         # Slot 管理器（slot start time -> leader）
+├── slot_manager.py         # Slot 管理器（slot 号 -> leader）
 ├── transaction_manager.py  # 交易管理器（含 end 标识）
 ├── strategy/               # 策略模块
 │   ├── base_strategy.py
@@ -68,10 +73,15 @@ uv sync
 ```env
 BLOCK_PATH=/path/to/processed_blocks
 SLOT_LEADER_PATH=/path/to/slot_leaders.csv
+START_SLOT=346769956
 SERVER_HOST=0.0.0.0
 SERVER_PORT=5000
 DEBUG_MODE=false
 ```
+
+`START_SLOT` 是起始 slot 号，slot 每次推进固定 +1；结束点取区块数据里最大的 slot 号。
+
+区块文件名形如 `block_346769956.json`，slot 号直接从文件名解析，与文件内的 blockTime 无关。
 
 ### 3. 启动 server
 
@@ -87,13 +97,15 @@ uv run python -m mitigation.server
 uv run python -m mitigation.user.client
 ```
 
-user 连接 server 后会收到当前 slot 广播，然后自动进入「收广播 → 发交易 → 发 end」循环。server 处理完最后一个 slot 后会发出 `simulation_done` 事件，user 自动断开。
+user 连接 server 后会收到当前 slot 广播，然后自动进入「收广播 → 发该 slot 交易 → 发 end」循环。server 处理完最后一个 slot 后会发出 `simulation_done` 事件，user 自动断开。
+
+Debug 模式下，user 发完 end 后会停住等待；此时在 server 终端按 Enter（或调 `POST /slot/advance`）才会广播下一个 slot。
 
 ## API接口
 
 ### GET /health
 
-健康检查，返回当前 slot start time、策略和 debug 模式。
+健康检查。返回当前 slot 号、策略、debug 模式，以及 `waiting_for_confirmation`（当前 slot 是否已处理完并等待手动确认，仅 debug 模式有意义）。
 
 ### POST /sendTransaction
 
@@ -102,26 +114,26 @@ user 连接 server 后会收到当前 slot 广播，然后自动进入「收广�
 ```json
 {
   "tx_id": "tx_123",
-  "slot": 1749916801,
+  "slot": 346769956,
   "signature": "sig_abc",
   "end": false
 }
 ```
 
-`slot` 是 slot start time（从广播里拿到的值）。
+`slot` 是 slot 号（从广播里拿到的值）。
 
 发送 end 标识（本 slot 交易全部发完）：
 
 ```json
 {
-  "slot": 1749916801,
+  "slot": 346769956,
   "end": true
 }
 ```
 
 ### GET /transactions/pending
 
-查看待处理交易（按 slot start time 列出）。
+查看待处理交易（按 slot 号列出）。
 
 ### GET /transactions/sent
 
@@ -129,17 +141,20 @@ user 连接 server 后会收到当前 slot 广播，然后自动进入「收广�
 
 ### GET /slot/current
 
-查看当前 slot start time。
+查看当前 slot 号。
 
 ### POST /slot/advance
 
-仅 debug 模式下可用：手动完成当前 slot 并推进。
+仅 debug 模式下可用。手动确认推进当前 slot：
+
+- 如果当前 slot 还没收到 `end` 并处理完交易，返回 `{"status": "waiting"}`，不会推进；
+- 收到 `end` 并处理完之后，返回 `{"status": "ok"}`，推进到 slot + 1 并广播。
 
 ## Socket.IO 事件
 
 | 事件 | 方向 | 数据 | 说明 |
 |------|------|------|------|
-| `new_slot` | server → user | `{slot, leader}` | 进入新 slot，user 开始发交易 |
+| `new_slot` | server → user | `{slot, leader}` | 进入新 slot，user 开始发该 slot 的交易 |
 | `simulation_done` | server → user | `{last_slot}` | 所有 slot 处理完成 |
 
 ## 测试

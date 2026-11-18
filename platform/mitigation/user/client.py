@@ -3,7 +3,7 @@ User module for simulating transaction sending by replaying historical blocks.
 
 新的 slot 机制：
   - user 连接 server 后监听 new_slot 事件（事件名需与 server.py 保持一致）
-  - 收到广播里的 slot start time 后，从 BLOCKS_DATA 取该 slot 的交易
+  - 收到广播里的 slot 号后，从 BLOCKS_DATA 取该 slot 的交易
   - 逐笔发送交易，最后发送 end 标识表示本 slot 交易全部发完
   - 然后等待 server 的下一个 slot 广播
 """
@@ -15,33 +15,33 @@ from typing import List, Dict, Any
 
 from config import SERVER_PORT, BLOCK_PATH
 from log import user_logger as logger
-from utils import build_block_time_index
+from utils import build_block_index
 
 NEW_SLOT_EVENT = 'new_slot'
 SIMULATION_DONE_EVENT = 'simulation_done'
 
 
 class TransactionUser:
-    """模拟用户：根据 server 广播的 slot start time 重放区块交易"""
+    """模拟用户：根据 server 广播的 slot 号重放该 slot 的区块交易"""
 
     def __init__(self, server_url: str, block_data_path: str):
         self.server_url = server_url.rstrip('/')
         self.block_data_path = block_data_path
 
-        # BLOCKS_DATA: slot start time -> 该 slot 的交易列表（按需加载并缓存）
+        # BLOCKS_DATA: slot 号 -> 该 slot 的交易列表（按需加载并缓存）
         self.BLOCKS_DATA: Dict[int, List[Dict[str, Any]]] = {}
-        # slot start time -> 对应的区块文件路径（轻量索引，只读文件头）
-        self._block_index = build_block_time_index(block_data_path)
+        # slot 号 -> 对应的区块文件路径
+        self._block_index = build_block_index(block_data_path)
 
         self._sio = socketio.Client(logger=False, engineio_logger=False)
         self._running = False
         self._register_socket_events()
 
         if self._block_index:
-            times = sorted(self._block_index)
+            slots = sorted(self._block_index)
             logger.info(
-                f"加载区块索引完成: slot start time 范围 {times[0]}-{times[-1]}, "
-                f"共 {len(times)} 个 slot"
+                f"加载区块索引完成: slot 范围 {slots[0]}-{slots[-1]}, "
+                f"共 {len(slots)} 个 slot"
             )
         else:
             logger.warning(f"区块数据路径无可用文件: {block_data_path}，将使用测试数据")
@@ -53,7 +53,7 @@ class TransactionUser:
         @self._sio.on(NEW_SLOT_EVENT)
         def on_new_slot(data: Dict[str, Any]):
             slot = int(data['slot'])
-            logger.info(f"收到新 slot 广播 (start time): {slot}")
+            logger.info(f"收到新 slot 广播: {slot}")
             self._send_slot_transactions(slot)
 
         @self._sio.on(SIMULATION_DONE_EVENT)
@@ -78,16 +78,17 @@ class TransactionUser:
         ]
 
     def _get_transactions_for_slot(self, slot: int) -> List[Dict[str, Any]]:
-        """从 BLOCKS_DATA 获取指定 slot start time 的交易（首次访问时加载）"""
+        """从 BLOCKS_DATA 获取指定 slot 的交易（首次访问时加载）"""
         if slot in self.BLOCKS_DATA:
             return self.BLOCKS_DATA[slot]
 
         transactions: List[Dict[str, Any]] = []
-        for block_file in self._block_index.get(slot, []):
+        block_file = self._block_index.get(slot)
+        if block_file is not None:
             try:
                 with open(block_file, 'r') as f:
                     block_data = json.load(f)
-                transactions.extend(block_data.get('transactions', []))
+                transactions = block_data.get('transactions', [])
             except Exception as e:
                 logger.warning(f"无法加载 {block_file}: {e}")
 
@@ -99,7 +100,7 @@ class TransactionUser:
         return transactions
 
     def get_available_blocks(self) -> List[int]:
-        """获取所有可用的 slot start time"""
+        """获取所有可用的 slot 号"""
         return sorted(self._block_index.keys())
 
     # ------------------------------------------------------------------

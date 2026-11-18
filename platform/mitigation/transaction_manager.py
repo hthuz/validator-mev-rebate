@@ -9,7 +9,7 @@ class TransactionManager:
     """管理接收到的交易，以及每个 slot 的结束标识"""
 
     def __init__(self):
-        # key 是 slot start time
+        # key 是 slot 号
         self._transactions: Dict[int, List[Transaction]] = defaultdict(list)
         self._ended_slots: Set[int] = set()
         self._lock = threading.Lock()
@@ -19,13 +19,13 @@ class TransactionManager:
         """添加一个交易到队列"""
         with self._lock:
             self._transactions[transaction.slot].append(transaction)
-            logger.info(f"接收交易: {transaction.tx_id}, slot(start time): {transaction.slot}")
+            logger.info(f"接收交易: {transaction.tx_id}, slot: {transaction.slot}")
 
     def mark_slot_end(self, slot: int) -> None:
         """标记某个 slot 的用户交易已全部发送完毕（收到 end 标识）"""
         with self._lock:
             self._ended_slots.add(slot)
-            logger.info(f"收到 end 标识，slot(start time) {slot} 交易发送结束")
+            logger.info(f"收到 end 标识，slot {slot} 交易发送结束")
 
     def is_slot_ended(self, slot: int) -> bool:
         """该 slot 是否已收到 end 标识"""
@@ -72,7 +72,7 @@ class TransactionManager:
             return self._sent_records.copy()
 
     def get_pending_slots(self) -> Set[int]:
-        """获取所有有待处理交易的 slot start time"""
+        """获取所有有待处理交易的 slot 号"""
         with self._lock:
             return set(self._transactions.keys())
 
