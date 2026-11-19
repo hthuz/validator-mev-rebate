@@ -1,5 +1,5 @@
 from .base_strategy import SendStrategy
-from type.models import Transaction
+from type.models import BlockTransaction
 
 
 class DelayedStrategy(SendStrategy):
@@ -8,7 +8,7 @@ class DelayedStrategy(SendStrategy):
     def __init__(self, delay_slots: int = 1):
         self.delay_slots = delay_slots
 
-    def should_send(self, transaction: Transaction, current_slot: int) -> bool:
+    def should_send(self, transaction: BlockTransaction, current_slot: int) -> bool:
         """当当前slot >= 交易slot + 延迟slot数时，发送交易"""
         return current_slot >= (transaction.slot + self.delay_slots)
 

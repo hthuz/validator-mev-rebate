@@ -5,7 +5,7 @@ from typing import Dict, Any
 from .transaction_manager import TransactionManager
 from .slot_manager import SlotManager
 from .strategy import ImmediateStrategy, SendStrategy
-from type.models import Transaction
+from type.models import BlockTransaction
 from config import SERVER_HOST, SERVER_PORT, DEBUG_MODE
 from log import server_logger as logger
 
@@ -86,17 +86,7 @@ class TransactionServer:
                     return jsonify({'status': 'end_accepted', 'slot': slot}), 200
 
                 # ---- 普通交易 ----
-                required_fields = ['tx_id', 'signature']
-                for field in required_fields:
-                    if field not in data:
-                        return jsonify({'error': f'Missing required field: {field}'}), 400
-
-                transaction = Transaction(
-                    tx_id=data['tx_id'],
-                    slot=slot,
-                    signature=data['signature'],
-                    data=data
-                )
+                transaction = BlockTransaction.from_dict(data)
 
                 self.transaction_manager.add_transaction(transaction)
 
@@ -106,7 +96,7 @@ class TransactionServer:
 
                 return jsonify({
                     'status': 'accepted',
-                    'tx_id': transaction.tx_id,
+                    'signature': transaction.signature,
                     'slot': transaction.slot
                 }), 200
 
@@ -127,7 +117,7 @@ class TransactionServer:
             return jsonify({
                 'records': [
                     {
-                        'tx_id': r.tx_id,
+                        'signature': r.signature,
                         'slot': r.slot,
                         'validator': r.validator,
                         'strategy': r.strategy,
@@ -209,7 +199,7 @@ class TransactionServer:
                 if self.strategy.should_send(tx, current_slot):
                     record = self.strategy.send_to_validator(tx, leader)
                     self.transaction_manager.add_sent_record(record)
-                    sent_ids.add(tx.tx_id)
+                    sent_ids.add(tx.signature)
 
             # 只移除已发送的，延迟策略未到期的交易继续保留
             if sent_ids:

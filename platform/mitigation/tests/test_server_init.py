@@ -38,17 +38,22 @@ def test_server_initialization():
 
     # 测试transaction manager
     print("\n4. 测试TransactionManager...")
-    from type.models import Transaction
-    tx = Transaction(
-        tx_id="test_001",
+    from type.models import BlockTransaction
+    tx = BlockTransaction(
         slot=100,
-        signature="test_sig",
-        data={"amount": 1000}
+        timestamp=0,
+        signatures=["test_sig"],
+        message={},
+        fee=5000,
+        preBalances=[],
+        postBalances=[],
+        instructions=[],
+        logMessages=[],
     )
     server1.transaction_manager.add_transaction(tx)
     pending = server1.transaction_manager.get_pending_slots()
     print(f"   ✓ TransactionManager工作正常")
-    print(f"   - 添加测试交易: {tx.tx_id}")
+    print(f"   - 添加测试交易: {tx.signature}")
     print(f"   - 待处理slots: {pending}")
 
     print("\n✅ 所有服务器组件测试通过!")

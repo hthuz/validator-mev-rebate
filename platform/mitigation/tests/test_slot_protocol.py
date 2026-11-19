@@ -9,6 +9,22 @@ sys.path.insert(0, str(project_root))
 from mitigation.server import create_server
 from mitigation.strategy import ImmediateStrategy, DelayedStrategy
 from mitigation.transaction_manager import TransactionManager
+from type.models import BlockTransaction
+
+
+def _tx_payload(slot, signature):
+    """构造 user client 会发送的 BlockTransaction 完整字段"""
+    return BlockTransaction(
+        slot=slot,
+        timestamp=0,
+        signatures=[signature],
+        message={},
+        fee=5000,
+        preBalances=[],
+        postBalances=[],
+        instructions=[],
+        logMessages=[],
+    ).to_dict()
 
 
 def _make_test_server(strategy=None, debug_mode=False):
@@ -58,14 +74,12 @@ def test_immediate_send_and_end_advances_slot():
     server = _make_test_server(debug_mode=False)
     client = server.app.test_client()
 
-    resp = client.post('/sendTransaction', json={
-        'tx_id': 'tx_1', 'slot': 1000, 'signature': 'sig_1'
-    })
+    resp = client.post('/sendTransaction', json=_tx_payload(1000, 'sig_1'))
     assert resp.status_code == 200
 
     records = server.transaction_manager.get_sent_records()
     assert len(records) == 1
-    assert records[0].tx_id == 'tx_1'
+    assert records[0].signature == 'sig_1'
     assert records[0].validator == 'validator_a'
     assert server.slot_manager.get_current_slot() == 1000
 
@@ -88,15 +102,13 @@ def test_delayed_strategy_sends_on_slot_advance():
     server = _make_test_server(strategy=DelayedStrategy(delay_slots=1), debug_mode=False)
     client = server.app.test_client()
 
-    client.post('/sendTransaction', json={
-        'tx_id': 'tx_delay', 'slot': 1000, 'signature': 'sig_delay'
-    })
+    client.post('/sendTransaction', json=_tx_payload(1000, 'sig_delay'))
     assert len(server.transaction_manager.get_sent_records()) == 0
 
     client.post('/sendTransaction', json={'slot': 1000, 'end': True})
     records = server.transaction_manager.get_sent_records()
     assert len(records) == 1
-    assert records[0].tx_id == 'tx_delay'
+    assert records[0].signature == 'sig_delay'
     assert server.slot_manager.get_current_slot() == 1001
 
 
@@ -106,9 +118,7 @@ def test_debug_mode_waits_for_manual_confirmation():
     client = server.app.test_client()
 
     # 先发交易，immediate 策略立即发送
-    client.post('/sendTransaction', json={
-        'tx_id': 'tx_d1', 'slot': 1000, 'signature': 'sig_d1'
-    })
+    client.post('/sendTransaction', json=_tx_payload(1000, 'sig_d1'))
     assert len(server.transaction_manager.get_sent_records()) == 1
 
     # 没收到 end 之前，手动推进被拒绝

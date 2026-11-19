@@ -6,16 +6,17 @@ User module for simulating transaction sending by replaying historical blocks.
   - 收到广播里的 slot 号后，从 BLOCKS_DATA 取该 slot 的交易
   - 逐笔发送交易，最后发送 end 标识表示本 slot 交易全部发完
   - 然后等待 server 的下一个 slot 广播
+
+交易统一用公共类型 BlockTransaction，从 block JSON 按需加载。
 """
-import json
-import time
 import requests
 import socketio
 from typing import List, Dict, Any
 
 from config import SERVER_PORT, BLOCK_PATH
 from log import user_logger as logger
-from utils import build_block_index
+from type.models import BlockTransaction
+from utils import build_block_index, load_block_transactions
 
 NEW_SLOT_EVENT = 'new_slot'
 SIMULATION_DONE_EVENT = 'simulation_done'
@@ -28,8 +29,8 @@ class TransactionUser:
         self.server_url = server_url.rstrip('/')
         self.block_data_path = block_data_path
 
-        # BLOCKS_DATA: slot 号 -> 该 slot 的交易列表（按需加载并缓存）
-        self.BLOCKS_DATA: Dict[int, List[Dict[str, Any]]] = {}
+        # BLOCKS_DATA: slot 号 -> 该 slot 的 BlockTransaction 列表（按需加载并缓存）
+        self.BLOCKS_DATA: Dict[int, List[BlockTransaction]] = {}
         # slot 号 -> 对应的区块文件路径
         self._block_index = build_block_index(block_data_path)
 
@@ -65,30 +66,33 @@ class TransactionUser:
     # ------------------------------------------------------------------
     # 区块数据（按需加载）
     # ------------------------------------------------------------------
-    def _generate_test_transactions(self, slot: int) -> List[Dict[str, Any]]:
+    def _generate_test_transactions(self, slot: int) -> List[BlockTransaction]:
         """没有真实区块数据时的测试交易"""
         return [
-            {
-                'signature': f'sig_{slot}_{i}',
-                'slot': slot,
-                'fee': 5000,
-                'status': 'success',
-            }
+            BlockTransaction(
+                slot=slot,
+                timestamp=0,
+                signatures=[f'sig_{slot}_{i}'],
+                message={},
+                fee=5000,
+                preBalances=[],
+                postBalances=[],
+                instructions=[],
+                logMessages=[],
+            )
             for i in range(5)
         ]
 
-    def _get_transactions_for_slot(self, slot: int) -> List[Dict[str, Any]]:
+    def _get_transactions_for_slot(self, slot: int) -> List[BlockTransaction]:
         """从 BLOCKS_DATA 获取指定 slot 的交易（首次访问时加载）"""
         if slot in self.BLOCKS_DATA:
             return self.BLOCKS_DATA[slot]
 
-        transactions: List[Dict[str, Any]] = []
+        transactions: List[BlockTransaction] = []
         block_file = self._block_index.get(slot)
         if block_file is not None:
             try:
-                with open(block_file, 'r') as f:
-                    block_data = json.load(f)
-                transactions = block_data.get('transactions', [])
+                transactions = load_block_transactions(block_file, slot=slot)
             except Exception as e:
                 logger.warning(f"无法加载 {block_file}: {e}")
 
@@ -106,25 +110,18 @@ class TransactionUser:
     # ------------------------------------------------------------------
     # 发送交易
     # ------------------------------------------------------------------
-    def send_transaction(self, tx_data: Dict[str, Any], slot: int) -> bool:
-        """发送单笔交易到服务器"""
+    def send_transaction(self, tx: BlockTransaction, slot: int) -> bool:
+        """发送单笔交易到服务器（发送 BlockTransaction 的完整字段）"""
         try:
-            payload = {
-                'tx_id': tx_data.get('signature', f"tx_{slot}_{time.time()}"),
-                'slot': slot,
-                'signature': tx_data.get('signature', ''),
-                'fee': tx_data.get('fee', 0),
-                'status': tx_data.get('status', 'unknown'),
-                'end': False,
-                'raw_data': tx_data,
-            }
+            payload = tx.to_dict()
+            payload['slot'] = slot
 
             response = requests.post(
                 f"{self.server_url}/sendTransaction", json=payload, timeout=30
             )
 
             if response.status_code == 200:
-                logger.info(f"✓ 发送交易成功: {payload['tx_id']}, slot: {slot}")
+                logger.info(f"✓ 发送交易成功: {tx.signature}, slot: {slot}")
                 return True
             else:
                 logger.error(f"✗ 发送交易失败: {response.status_code}, {response.text}")

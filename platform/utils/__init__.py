@@ -17,4 +17,6 @@ __all__ = [
     'obj_to_dict',
     'build_block_index',
     'extract_slot_from_block_path',
+    'parse_block_transactions',
+    'load_block_transactions',
 ]

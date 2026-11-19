@@ -1,7 +1,7 @@
 from typing import Dict, List, Set
 from collections import defaultdict
 import threading
-from type.models import Transaction, TransactionRecord
+from type.models import BlockTransaction, TransactionRecord
 from log import transaction_manager_logger as logger
 
 
@@ -10,16 +10,16 @@ class TransactionManager:
 
     def __init__(self):
         # key 是 slot 号
-        self._transactions: Dict[int, List[Transaction]] = defaultdict(list)
+        self._transactions: Dict[int, List[BlockTransaction]] = defaultdict(list)
         self._ended_slots: Set[int] = set()
         self._lock = threading.Lock()
         self._sent_records: List[TransactionRecord] = []
 
-    def add_transaction(self, transaction: Transaction) -> None:
+    def add_transaction(self, transaction: BlockTransaction) -> None:
         """添加一个交易到队列"""
         with self._lock:
             self._transactions[transaction.slot].append(transaction)
-            logger.info(f"接收交易: {transaction.tx_id}, slot: {transaction.slot}")
+            logger.info(f"接收交易: {transaction.signature}, slot: {transaction.slot}")
 
     def mark_slot_end(self, slot: int) -> None:
         """标记某个 slot 的用户交易已全部发送完毕（收到 end 标识）"""
@@ -37,24 +37,24 @@ class TransactionManager:
         with self._lock:
             self._ended_slots.discard(slot)
 
-    def get_transactions_for_slot(self, slot: int) -> List[Transaction]:
+    def get_transactions_for_slot(self, slot: int) -> List[BlockTransaction]:
         """获取特定 slot 的所有交易"""
         with self._lock:
             return self._transactions.get(slot, []).copy()
 
-    def remove_transactions_for_slot(self, slot: int) -> List[Transaction]:
+    def remove_transactions_for_slot(self, slot: int) -> List[BlockTransaction]:
         """移除并返回特定 slot 的所有交易"""
         with self._lock:
             transactions = self._transactions.pop(slot, [])
             self._ended_slots.discard(slot)
             return transactions
 
-    def remove_transactions(self, slot: int, tx_ids: Set[str]) -> None:
-        """只移除指定 id 的交易，其余保留（用于延迟策略）"""
-        if not tx_ids:
+    def remove_transactions(self, slot: int, signatures: Set[str]) -> None:
+        """只移除指定签名的交易，其余保留（用于延迟策略）"""
+        if not signatures:
             return
         with self._lock:
-            remaining = [tx for tx in self._transactions.get(slot, []) if tx.tx_id not in tx_ids]
+            remaining = [tx for tx in self._transactions.get(slot, []) if tx.signature not in signatures]
             if remaining:
                 self._transactions[slot] = remaining
             else:
@@ -64,7 +64,7 @@ class TransactionManager:
         """记录已发送的交易"""
         with self._lock:
             self._sent_records.append(record)
-            logger.info(f"记录发送: tx_id={record.tx_id}, validator={record.validator}, strategy={record.strategy}")
+            logger.info(f"记录发送: signature={record.signature}, validator={record.validator}, strategy={record.strategy}")
 
     def get_sent_records(self) -> List[TransactionRecord]:
         """获取所有发送记录"""

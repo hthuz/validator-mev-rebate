@@ -20,7 +20,7 @@ def test_imports():
 
     # 测试type
     print("✓ 导入 type")
-    from type.models import Transaction, SlotLeader, TransactionRecord
+    from type.models import BlockTransaction, SlotLeader, TransactionRecord
 
     # 测试mitigation模块
     print("✓ 导入 mitigation.strategy")
