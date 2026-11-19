@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
-from type.models import BlockTransaction, TransactionRecord
+from type.models import RoutableTransaction, TransactionRecord
 from log import strategy_logger as logger
 
 
@@ -28,7 +28,7 @@ class SendStrategy(ABC):
         return self._context
 
     @abstractmethod
-    def should_send(self, transaction: BlockTransaction, current_slot: int) -> bool:
+    def should_send(self, transaction: RoutableTransaction, current_slot: int) -> bool:
         """判断是否应该发送交易"""
         pass
 
@@ -39,7 +39,7 @@ class SendStrategy(ABC):
 
     def send_to_validator(
         self,
-        transaction: BlockTransaction,
+        transaction: RoutableTransaction,
         validator: str,
         current_slot: Optional[int] = None,
     ) -> TransactionRecord:

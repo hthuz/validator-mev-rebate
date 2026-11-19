@@ -76,11 +76,17 @@ uv sync
 复制 `.env.example` 到 `.env` 并配置：
 
 ```env
-SLOT_LEADER_PATH=/path/to/slot_leaders.csv
+CLICKHOUSE_HOST=localhost
+CLICKHOUSE_PORT=8123
+CLICKHOUSE_UESR=sol
+CLICKHOUSE_PASSWORD=sol
+CLICKHOUSE_DBNAME=solwich
 DEBUG_MODE=true
 SERVER_HOST=0.0.0.0
 SERVER_PORT=5000
 ```
+
+Mitigation 的 slot leader 与 sandwich ratio 都从 ClickHouse 读取，不再需要 SLOT_LEADER_PATH 文件。
 
 ### 4. 运行模块
 

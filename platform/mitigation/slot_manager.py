@@ -1,13 +1,11 @@
 from typing import Dict, List, Optional
 
-import pandas as pd
-
 from config import (
-    SLOT_LEADER_PATH,
     MITIGATION_START_SLOT,
     MITIGATION_END_SLOT,
 )
 from log import slot_manager_logger as logger
+from utils.ch import query_clickhouse
 
 
 class SlotManager:
@@ -19,11 +17,11 @@ class SlotManager:
     处理完该 slot 的交易后推进到下一个 slot。
 
     slot 范围由 config 的 MITIGATION_START_SLOT / MITIGATION_END_SLOT 决定，
-    两端都是 inclusive，每次推进固定 +1。
+    两端都是 inclusive，每次推进固定 +1。leader 从 ClickHouse 的 slot_leaders 表加载，
+    不再读本地文件。查询失败时降级为空字典（此时 process 会跳过无 leader 的 slot）。
     """
 
-    def __init__(self):
-        # key: slot 号, value: validator leader
+    def __init__(self, leaders: Optional[Dict[int, str]] = None):
         self._slot_leaders: Dict[int, str] = {}
 
         self._start_slot: int = MITIGATION_START_SLOT
@@ -36,29 +34,27 @@ class SlotManager:
                 f"MITIGATION_END_SLOT ({self._end_slot})"
             )
 
-        self._load_slot_leaders()
+        self._slot_leaders = (
+            dict(leaders) if leaders is not None else self._load_slot_leaders()
+        )
         logger.info(
             f"Slot 范围: {self._start_slot} - {self._end_slot} (inclusive)，"
-            f"共 {self.end_slot - self.start_slot + 1} 个"
+            f"共 {self.end_slot - self.start_slot + 1} 个，"
+            f"已加载 {len(self._slot_leaders)} 条 leader"
         )
 
-    def _load_slot_leaders(self) -> None:
+    def _load_slot_leaders(self) -> Dict[int, str]:
         try:
-            df = pd.read_csv(SLOT_LEADER_PATH)
-            logger.info(f"加载slot leaders文件: {SLOT_LEADER_PATH}")
-            logger.debug(f"列名: {df.columns.tolist()}")
-
-            if 'slot' in df.columns and 'leader' in df.columns:
-                for _, row in df.iterrows():
-                    self._slot_leaders[int(row['slot'])] = str(row['leader'])
-            elif len(df.columns) >= 2:
-                for _, row in df.iterrows():
-                    self._slot_leaders[int(row.iloc[0])] = str(row.iloc[1])
-
-            logger.info(f"加载了 {len(self._slot_leaders)} 条slot leader记录")
+            rows = query_clickhouse(
+                "SELECT slot, leader FROM slot_leaders "
+                f"WHERE slot BETWEEN {self._start_slot} AND {self._end_slot}"
+            )
+            leaders = {int(row['slot']): str(row['leader']) for row in rows}
+            logger.info(f"从 ClickHouse 加载了 {len(leaders)} 条 slot leader 记录")
         except Exception as e:
-            logger.warning(f"无法加载slot leaders文件: {e}")
-            self._slot_leaders = {}
+            logger.warning(f"无法从 ClickHouse 加载 slot leaders: {e}")
+            leaders = {}
+        return leaders
 
     @property
     def start_slot(self) -> int:

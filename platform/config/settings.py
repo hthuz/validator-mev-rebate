@@ -31,6 +31,11 @@ SLOT_LEADER_PATH = os.getenv("SLOT_LEADER_PATH")
 MITIGATION_START_SLOT = int(os.getenv("MITIGATION_START_SLOT", "346769956"))
 MITIGATION_END_SLOT = int(os.getenv("MITIGATION_END_SLOT", "346769956"))
 
+# Mitigation: replay 数据源，block = 原始区块交易，victim = sandwich victim 交易
+MITIGATION_TX_SOURCE = os.getenv("MITIGATION_TX_SOURCE", "block")
+# victim 模式取哪个 epoch 的 victim 交易（slot 范围仍是 MITIGATION_START_SLOT / END_SLOT）
+MITIGATION_REPLAY_EPOCH = int(os.getenv("MITIGATION_REPLAY_EPOCH", "802"))
+
 # Mitigation: 发送策略，可选 immediate / delayed / risk-aware
 MITIGATION_STRATEGY = os.getenv("MITIGATION_STRATEGY", "immediate")
 # DelayedStrategy 的延迟 slot 数

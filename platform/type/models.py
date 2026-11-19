@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Protocol, runtime_checkable
 from datetime import datetime
 
 
@@ -78,3 +78,42 @@ class TransactionRecord:
     target_slot: Optional[int] = None   # 实际落地 slot（模拟推进到的 slot）
     delay_slots: int = 0                # target_slot - slot
     leader_risky: bool = False          # 落地 leader 是否为高风险
+
+
+@runtime_checkable
+class RoutableTransaction(Protocol):
+    """路由链路依赖的交易最小接口。
+
+    server 与策略只读取 slot 和 signature，不依赖具体交易类型。
+    BlockTransaction 与 SandwichTransaction 都满足这个协议。
+    """
+    slot: int
+    signature: str
+
+
+@dataclass
+class SandwichTransaction:
+    """从 sandwiches_nobundle 的 victim 行构造的交易。
+
+    字段直接对应 CK 表列；没有 BlockTransaction 需要的 fee / balances /
+    instructions / message，因此是独立类型而不是 BlockTransaction 的子类。
+    """
+    slot: int
+    signature: str
+    timestamp: Optional[str] = None
+    position: Optional[int] = None
+    type: Optional[str] = None
+    signer: Optional[str] = None
+    accountKeys: List[str] = field(default_factory=list)
+    consecutive: bool = False
+    programs: List[str] = field(default_factory=list)
+    inbundle: bool = False
+    signerSame: bool = False
+    crossBlock: bool = False
+    oppositeVictim: bool = False
+    fromToken: Optional[str] = None
+    toToken: Optional[str] = None
+    fromAmount: float = 0.0
+    toAmount: float = 0.0
+    fromDiff: float = 0.0
+    toDiff: float = 0.0

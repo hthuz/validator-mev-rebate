@@ -14,6 +14,8 @@ __all__ = [
     'print_sorted',
     'SlotInfo',
     'get_sandwich_info',
+    'get_sandwich_ratios',
+    'get_victim_transactions',
     'obj_to_dict',
     'build_block_index',
     'extract_slot_from_block_path',

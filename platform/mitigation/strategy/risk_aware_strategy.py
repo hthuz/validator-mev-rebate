@@ -1,6 +1,6 @@
 from .base_strategy import SendStrategy
 from config import MITIGATION_MAX_SKIP_SLOTS
-from type.models import BlockTransaction
+from type.models import RoutableTransaction
 
 
 class RiskAwareStrategy(SendStrategy):
@@ -15,7 +15,7 @@ class RiskAwareStrategy(SendStrategy):
             raise ValueError(f"max_skip_slots 不能为负数: {max_skip_slots}")
         self.max_skip_slots = max_skip_slots
 
-    def should_send(self, transaction: BlockTransaction, current_slot: int) -> bool:
+    def should_send(self, transaction: RoutableTransaction, current_slot: int) -> bool:
         if current_slot < transaction.slot:
             return False
 

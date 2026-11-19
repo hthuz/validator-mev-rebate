@@ -7,7 +7,20 @@ Mitigation 模块用于模拟不同交易发送策略对 sandwich 攻击的缓�
 - **`python -m mitigation.sim`（推荐）**：进程内模拟，直接调用 server 与 client 的业务函数，不启动 HTTP/Socket.IO，由 sim 自己推进 slot，结束后把交易处理概况打印到终端。
 - **server + client**：保留原有的 HTTP + Socket.IO 链路，用于交互式验证和联调。
 
-两条入口共用同一份业务函数（`TransactionServer`），策略、阈值、slot 范围全部从 config 读取，CLI 不接受任何参数。
+两条入口共用同一份业务函数（`TransactionServer`），策略、阈值、slot 范围、数据源全部从 config 读取，CLI 不接受任何参数。
+
+## 数据源
+
+`MITIGATION_TX_SOURCE` 决定 sim 重放什么交易：
+
+| 值 | 数据源 | 交易类型 | 用途 |
+|----|--------|----------|------|
+| `block` | 区块 JSON（`BLOCK_PATH`） | `BlockTransaction`，全量原始交易 | 原有模式 |
+| `victim` | ClickHouse `sandwiches_nobundle` | `SandwichTransaction`，去重后的 victim 交易 | 看 victim 能否避开恶意 leader |
+
+slot 的 leader 一律从 ClickHouse 的 `slot_leaders` 表按 `MITIGATION_START_SLOT/END_SLOT` 范围加载，不再读本地 CSV。查询失败时降级为空 leader 集合，此时交易不会发送。
+
+两种交易类型只依赖一个最小协议 `RoutableTransaction`（`slot` + `signature`），不需要 ABC，也不改核心业务函数。
 
 ## 架构分层
 
@@ -17,20 +30,15 @@ HTTP / Socket.IO 适配层      mitigation/routes.py
                                   ▼
 业务函数层（唯一实现）        mitigation/server.py  TransactionServer
                               ├─ transaction_manager.py  计数 / 延迟详情 / 报表
-                              ├─ slot_manager.py         slot 号 → leader
+                              ├─ slot_manager.py         slot 号 → leader（ClickHouse）
                               └─ strategy/               策略 + 风险注入
                                   ▲
                                   │ 直接函数调用，无网络
 进程内模拟入口                mitigation/sim.py
-                              └─ user/replay.py  BlockReplaySource（区块加载，与 client 共用）
+                              ├─ user/replay.py       BlockReplaySource（区块 JSON）
+                              ├─ user/victim_source.py VictimReplaySource（victim）
+                              └─ evaluation.py        victim 三档落地评估
 ```
-
-`TransactionServer` 的业务函数：
-- `set_slot(slot)` / `submit_transaction(tx)` / `close_slot(slot)` / `advance_slot()` 驱动 slot 生命周期
-- `process()` 按策略判定发送
-- `get_report()` / `get_pending()` / `get_risk_summary()` / `get_health()` 返回纯 dict
-
-`with_transport=False` 时 server 不创建 Flask/Socket.IO 对象，供 sim 使用；默认值 `True` 保持原有 server 行为。
 
 ## Slot 机制
 
@@ -38,20 +46,7 @@ HTTP / Socket.IO 适配层      mitigation/routes.py
 
 slot 范围由 `MITIGATION_START_SLOT` / `MITIGATION_END_SLOT` 决定（两端 inclusive），每次固定 +1。
 
-**server + client 模式**由事件驱动：
-
-```
-1. server 进入新 slot（从 MITIGATION_START_SLOT 开始，每次 +1）
-       ↓  Socket.IO 广播 new_slot {slot, leader}
-2. user 收到广播，从区块数据取该 slot 的交易
-       ↓  逐笔 POST /sendTransaction
-3. server 收到交易后立即按当前策略处理
-       ↓  user 发 end 标识：{"slot": slot, "end": true}
-4. server 收到 end → 处理收尾交易 → 推进到下一个 slot → 回到 1
-5. MITIGATION_END_SLOT 处理完后只发 simulation_done
-```
-
-**sim 模式**没有广播和 end 消息，slot 循环由 `run_simulation()` 自己的 for 循环驱动：
+**sim 模式**：
 
 ```
 for slot in config 的 slot 范围:
@@ -61,6 +56,8 @@ for slot in config 的 slot 范围:
     server.close_slot(slot)
 ```
 
+**server + client 模式**由事件驱动，见下方 Socket.IO 事件说明。
+
 ## 配置驱动
 
 **CLI 不接受任何参数**。所有参数从 `config/settings.py` 读取（可由 `.env` 覆盖）。
@@ -69,27 +66,27 @@ for slot in config 的 slot 范围:
 MITIGATION_START_SLOT=346769956
 MITIGATION_END_SLOT=346769958
 BLOCK_PATH=/path/to/processed_blocks
-SLOT_LEADER_PATH=/path/to/slot_leaders.csv
+
+# block / victim
+MITIGATION_TX_SOURCE=victim
+# victim 模式取哪个 epoch 的交易
+MITIGATION_REPLAY_EPOCH=802
 
 # immediate / delayed / risk-aware
 MITIGATION_STRATEGY=risk-aware
-# 仅 delayed 策略使用
 MITIGATION_DELAY_SLOTS=1
 ```
 
-`build_strategy_from_config()` 按 `MITIGATION_STRATEGY` 构造策略；sim、`run.py`、`python -m mitigation.server`、`start.sh` 四条路径都走这条路径。未知策略名会直接抛 `ValueError`。
+`MITIGATION_START_SLOT` 不能大于 `MITIGATION_END_SLOT`，否则 `SlotManager` 初始化报错。要按整个 epoch 重放 victim，把 slot 范围设成该 epoch 的边界（epoch N 的 slot 范围是 `N*432000 ~ (N+1)*432000-1`）。
 
 ## RiskAwareStrategy
 
-server 维护一个历史 epoch 范围（默认 800-801）内各 validator 的 sandwich ratio，ratio 计算复用 `utils.sandwich.get_sandwich_ratios()`（即 `SandwichSlotNum / SlotNum`）。
+server 维护一个历史 epoch 范围（默认 800-801）内各 validator 的 sandwich ratio，ratio 计算复用 `utils.sandwich.get_sandwich_ratios()`（`SandwichSlotNum / SlotNum`）。
 
 判定规则：
-- 任意一个历史 epoch 的 ratio **严格大于** `SANDWICH_RATIO_THRESHOLD`（默认 0.5）→ 该 validator 为高风险。
-- NaN / 无数据的 validator 视为安全。
-- 当前 slot 的 leader 高风险时继续持有交易；遇到安全 leader 立即发送。
-- 一直高风险且达到 `MITIGATION_MAX_SKIP_SLOTS`（默认 10）时，在当前 slot 强制发送。
-
-相关配置项：
+- 任意一个历史 epoch 的 ratio **严格大于** `SANDWICH_RATIO_THRESHOLD`（默认 0.5）→ 高风险。
+- NaN / 无数据视为安全。
+- 当前 leader 高风险时继续持有，遇到安全 leader 立即发送；达到 `MITIGATION_MAX_SKIP_SLOTS`（默认 10）强制发送。
 
 ```env
 SANDWICH_HISTORY_START_EPOCH=800
@@ -98,47 +95,41 @@ SANDWICH_RATIO_THRESHOLD=0.5
 MITIGATION_MAX_SKIP_SLOTS=10
 ```
 
-使用 risk-aware 策略时还需配置 ClickHouse（读历史 sandwich ratio）。加载失败只 warning 并视为空风险集，所以启动时务必看风险摘要——sim 会直接打印，server 模式访问 `GET /risk/summary`。
+启动先看风险摘要：sim 直接打印，server 模式访问 `GET /risk/summary`。加载失败只会 warning 并退化为空风险集。质押维度暂未接入。
 
-质押维度暂未接入。
+## Victim 落地评估
+
+策略用历史 epoch（800-801）做决策，效果用**当前 replay epoch（802）自身的观测**做标签，时间上是干净的留出验证。三档标签：
+
+| 标签 | 判定 | 含义 |
+|------|------|------|
+| `confirmed_sandwiched` | 落地 slot == 原始 slot | 数据里确认被 sandwich |
+| `leader_observed_sandwich` | 换了 slot，但落地 leader 在本 epoch 观测到过 victim sandwich | 假定仍有风险 |
+| `clean_leader` | 换了 slot，落地 leader 没有观测到 sandwich | 假定规避成功 |
+
+这是代理指标，不是反事实真值：victim 改道后不在历史区块里，无法观测搜索者是否会重新攻击它。`immediate` 策略下所有 victim 都留在原 slot，`confirmed_sandwiched` 应为 100%，可作为基线。
+
+victim 按 signature 去重（同一 victim 可能出现在多个 sandwich 里）；epoch 802 实测 33,560 行 → 32,879 笔唯一 victim。
 
 ## 快速开始
 
-### 1. 安装依赖并配置
-
 ```bash
 uv sync
-```
-
-`.env` 中至少包含上一节列出的 slot 范围、数据路径与策略配置。`MITIGATION_START_SLOT` 不能大于 `MITIGATION_END_SLOT`，否则 `SlotManager` 初始化会报错。
-
-区块文件名形如 `block_346769956.json`，slot 号直接从文件名解析，与文件内的 blockTime 无关。
-
-### 2. 跑 sim（推荐）
-
-```bash
 uv run python -m mitigation.sim
 ```
 
-sim 不启动 server、不需要 client、不走网络。启动时打印风险数据概况，slot 循环跑完后打印交易处理概况，格式见下方 `GET /transactions/sent`。
-
-### 3. 跑 server + client（兼容路径）
+server + client 兼容路径：
 
 终端 1：
 ```bash
 uv run python mitigation/scripts/run.py
-# 或
-uv run python -m mitigation.server
-# 或
-bash mitigation/scripts/start.sh
+# 或 uv run python -m mitigation.server / bash mitigation/scripts/start.sh
 ```
 
 终端 2：
 ```bash
 uv run python -m mitigation.user.client
 ```
-
-user 连接 server 后会收到当前 slot 广播，自动进入「收广播 → 发该 slot 交易 → 发 end」循环。server 处理完 `MITIGATION_END_SLOT` 后会发出 `simulation_done`，user 自动断开。
 
 ## 文件结构
 
@@ -147,18 +138,15 @@ mitigation/
 ├── sim.py                  # 进程内模拟入口
 ├── server.py               # TransactionServer 业务 core
 ├── routes.py               # HTTP / Socket.IO 适配层
-├── slot_manager.py         # Slot 管理器（slot 号 -> leader）
-├── transaction_manager.py  # 交易管理器（计数 / 延迟详情 / 报表）
-├── risk_store.py           # 历史 epoch sandwich ratio 存储与风险判定
-├── strategy/               # 策略模块
-│   ├── base_strategy.py    # 含 StrategyContext（leader 查询 + 风险存储注入）
-│   ├── immediate_strategy.py
-│   ├── delayed_strategy.py
-│   ├── risk_aware_strategy.py
-│   └── factory.py          # 按 config 构造策略
+├── slot_manager.py         # slot 号 -> leader（ClickHouse）
+├── transaction_manager.py  # 交易计数 / 延迟详情 / 报表
+├── risk_store.py           # 历史 epoch sandwich ratio
+├── evaluation.py           # victim 三档落地评估
+├── strategy/               # immediate / delayed / risk-aware + factory
 ├── user/
 │   ├── client.py           # 用户客户端（广播驱动）
-│   └── replay.py           # BlockReplaySource（区块加载，sim 共用）
+│   ├── replay.py           # BlockReplaySource
+│   └── victim_source.py    # VictimReplaySource
 ├── docx/
 ├── tests/
 └── scripts/
@@ -167,45 +155,16 @@ mitigation/
 ## API接口
 
 ### GET /health
-
-健康检查。返回当前 slot 号、策略、debug 模式（仅信息展示）。
+当前 slot、策略、debug 模式。
 
 ### POST /sendTransaction
-
-发送交易（BlockTransaction 完整字段）：
-
-```json
-{
-  "slot": 346769956,
-  "timestamp": 1749916801,
-  "signatures": ["sig_abc"],
-  "message": {},
-  "fee": 5000,
-  "preBalances": [],
-  "postBalances": [],
-  "instructions": [],
-  "logMessages": []
-}
-```
-
-`slot` 是 slot 号（从广播里拿到的值）。交易唯一标识是 `signatures[0]`。
-
-发送 end 标识（本 slot 交易全部发完）：
-
-```json
-{
-  "slot": 346769956,
-  "end": true
-}
-```
+发送 `BlockTransaction` 完整字段（`slot` 是 slot 号，唯一标识为 `signatures[0]`），或发送 `{"slot": N, "end": true}` 标识本 slot 发完。
 
 ### GET /transactions/pending
-
-查看待处理交易（按 slot 号列出）。
+按 slot 列出待处理交易。
 
 ### GET /transactions/sent
-
-查看发送概况。**未延迟的交易只累加计数，不逐笔留存；延迟交易保留完整详情。**
+返回 `get_report()`：未延迟交易只计数，延迟交易留详情。
 
 ```json
 {
@@ -223,45 +182,30 @@ mitigation/
   },
   "delayed_records": [
     {
-      "signature": "sig_abc",
-      "slot": 10,
-      "target_slot": 12,
-      "delay_slots": 2,
-      "validator": "validator_x",
-      "leader_risky": true,
-      "strategy": "RiskAwareStrategy(max_skip=10)",
+      "signature": "sig_abc", "slot": 10, "target_slot": 12,
+      "delay_slots": 2, "validator": "validator_x",
+      "leader_risky": true, "strategy": "RiskAwareStrategy(max_skip=10)",
       "sent_at": 1749916801.0
     }
   ]
 }
 ```
 
-- `total_processed`: 总共处理的交易数（含未延迟）
-- `delay_stats.all`: 所有交易的延迟概况（未延迟按 0 计）
-- `delay_stats.delayed`: 仅延迟交易的延迟概况
-- `slot_overview.original` / `target`: 延迟交易的原 slot / 落地 slot 分布
-- `slot_overview.moves`: 原 slot → 落地 slot 的迁移统计
-- `delayed_records`: 延迟交易逐笔详情
-
 ### GET /risk/summary
-
-查看历史 epoch 范围、阈值、各 epoch 加载的 validator 数量，以及高风险 validator 列表。未启用 risk-aware 策略时返回 `{"loaded": false}`。
+历史 epoch 范围、阈值、各 epoch 加载数量、高风险 validator 列表。
 
 ### GET /slot/current
-
-查看当前 slot 号。
+当前 slot 号。
 
 ## Socket.IO 事件
 
 | 事件 | 方向 | 数据 | 说明 |
 |------|------|------|------|
 | `new_slot` | server → user | `{slot, leader}` | 进入新 slot，user 开始发该 slot 的交易 |
-| `simulation_done` | server → user | `{last_slot}` | MITIGATION_END_SLOT 处理完成，不再有 new_slot |
+| `simulation_done` | server → user | `{last_slot}` | END slot 处理完成，不再有 new_slot |
 
 ## 测试
 
 ```bash
 uv run python -m pytest tests/ mitigation/tests/
 ```
-
-`test_sim.py` 覆盖 sim 与 HTTP 路径报告一致性、config slot 范围、风险跳过场景。

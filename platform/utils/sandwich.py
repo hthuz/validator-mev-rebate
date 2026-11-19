@@ -5,6 +5,8 @@ import numpy as np
 from collections import defaultdict
 from config import *
 
+from .ch import query_clickhouse
+
 
 class SlotInfo:
     def __init__(self):
@@ -52,15 +54,17 @@ def get_ch_client():
 
 # identity => slot info
 def get_sandwich_info(epoch: int) -> dict[str, SlotInfo]:
-    client = get_ch_client()
     map = defaultdict(SlotInfo)
     epoch_start = 432000 * epoch
     epoch_end = epoch_start + 432000 - 1
 
     sandwich_block_query = f"""
-    SELECT l.leader, COUNT(DISTINCT slot), COUNT(DISTINCT signature)
+    SELECT l.leader AS leader,
+           COUNT(DISTINCT s.slot) AS sandwich_slot_num,
+           COUNT(DISTINCT s.signature) AS sandwich_num
     FROM sandwiches_nobundle s JOIN slot_leaders l ON s.slot = l.slot
-    WHERE slot between {epoch_start} and {epoch_end} and consecutive = true and type = 'backrun' and fromToken != ''
+    WHERE s.slot between {epoch_start} and {epoch_end}
+      and s.consecutive = true and s.type = 'backrun' and s.fromToken != ''
     GROUP BY l.leader
     """
     # sandwich_block_query = f"""
@@ -70,25 +74,23 @@ def get_sandwich_info(epoch: int) -> dict[str, SlotInfo]:
     # GROUP BY l.leader
     # """
 
-    result = client.query(sandwich_block_query)
-    for row in result.result_rows:
-        leader, sandwich_slot_num, sandwich_num = row
+    for row in query_clickhouse(sandwich_block_query):
+        leader = row['leader']
         map[leader].identity = leader
-        map[leader].SandwichSlotNum = sandwich_slot_num
-        map[leader].SandwichNum = sandwich_num
+        map[leader].SandwichSlotNum = row['sandwich_slot_num']
+        map[leader].SandwichNum = row['sandwich_num']
 
     slot_query = f"""
-    SELECT leader, COUNT(DISTINCT slot)
+    SELECT leader, COUNT(DISTINCT slot) AS slot_num
     FROM slot_leaders
     WHERE slot between {epoch_start} and {epoch_end}
     GROUP BY leader
     """
 
-    result = client.query(slot_query)
-    for row in result.result_rows:
-        leader, slot_num = row
+    for row in query_clickhouse(slot_query):
+        leader = row['leader']
         map[leader].identity = leader
-        map[leader].SlotNum = slot_num
+        map[leader].SlotNum = row['slot_num']
 
     # # Sandwich SOL profit
     # profit_query = f"""
@@ -187,6 +189,39 @@ def get_sandwich_ratios(epoch: int) -> dict[str, float]:
         for identity, slot_info in info.items()
     }
 
+
+
+def get_victim_transactions(epoch: int) -> list:
+    """获取指定 epoch 内的 victim 交易，按 signature 去重。
+
+    同一个 victim 可能出现在多个 sandwich 里，这里只保留一条；
+    slot / 交易字段用 any() 取值。计算口径与 get_sandwich_info 共用 epoch 边界。
+    """
+    # 延迟导入避免 utils -> type.validator -> utils 的循环依赖
+    from type.models import SandwichTransaction
+
+    epoch_start = 432000 * epoch
+    epoch_end = epoch_start + 432000 - 1
+
+    sql = f"""
+    SELECT slot, signature, position, signer, accountKeys, consecutive, programs,
+           inbundle, signerSame, crossBlock, oppositeVictim,
+           fromToken, toToken, fromAmount, toAmount, fromDiff, toDiff, timestamp
+    FROM sandwiches_nobundle
+    WHERE slot BETWEEN {epoch_start} AND {epoch_end} AND type = 'victim'
+    """
+
+    transactions = []
+    seen = set()
+    for row in query_clickhouse(sql):
+        signature = row['signature']
+        if signature in seen:
+            continue
+        seen.add(signature)
+        data = dict(row)
+        data['type'] = 'victim'
+        transactions.append(SandwichTransaction(**data))
+    return transactions
 
 
 def export_to_csv(epoch: int) -> None:

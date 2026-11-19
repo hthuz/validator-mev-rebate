@@ -15,7 +15,7 @@ from .routes import (
     register_socket_events,
     broadcast_slot,
 )
-from type.models import BlockTransaction
+from type.models import RoutableTransaction
 from config import SERVER_HOST, SERVER_PORT, DEBUG_MODE
 from log import server_logger as logger
 
@@ -41,9 +41,10 @@ class TransactionServer:
         strategy: SendStrategy = None,
         risk_store: ValidatorRiskStore = None,
         with_transport: bool = True,
+        slot_manager: SlotManager = None,
     ):
         self.transaction_manager = TransactionManager()
-        self.slot_manager = SlotManager()
+        self.slot_manager = slot_manager or SlotManager()
         self.strategy = strategy or ImmediateStrategy()
         self.risk_store = risk_store
         self._running = False
@@ -89,7 +90,7 @@ class TransactionServer:
         return self.slot_manager.get_current_slot()
 
     def submit_transaction(
-        self, transaction: BlockTransaction, slot: Optional[int] = None
+        self,         transaction: RoutableTransaction, slot: Optional[int] = None
     ) -> bool:
         """接收一笔交易并按当前策略尝试发送。"""
         if slot is not None and slot != transaction.slot:
@@ -240,12 +241,14 @@ def create_server(
     strategy: SendStrategy = None,
     risk_store: ValidatorRiskStore = None,
     with_transport: bool = True,
+    slot_manager: SlotManager = None,
 ) -> TransactionServer:
     """工厂函数：创建服务器实例。sim 传 with_transport=False 只拿业务 core。"""
     return TransactionServer(
         strategy=strategy,
         risk_store=risk_store,
         with_transport=with_transport,
+        slot_manager=slot_manager,
     )
 
 
