@@ -167,7 +167,6 @@ python mitigation/tests/test_server_init.py
 | GET | /transactions/pending | 待处理交易 |
 | GET | /transactions/sent | 已发送交易 |
 | GET | /slot/current | 当前slot |
-| POST | /slot/advance | 推进slot（debug模式） |
 
 ## 环境配置
 

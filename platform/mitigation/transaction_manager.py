@@ -19,7 +19,7 @@ class TransactionManager:
         """添加一个交易到队列"""
         with self._lock:
             self._transactions[transaction.slot].append(transaction)
-            logger.info(f"接收交易: {transaction.signature}, slot: {transaction.slot}")
+            # logger.info(f"接收交易: {transaction.signature}, slot: {transaction.slot}")
 
     def mark_slot_end(self, slot: int) -> None:
         """标记某个 slot 的用户交易已全部发送完毕（收到 end 标识）"""
@@ -64,7 +64,7 @@ class TransactionManager:
         """记录已发送的交易"""
         with self._lock:
             self._sent_records.append(record)
-            logger.info(f"记录发送: signature={record.signature}, validator={record.validator}, strategy={record.strategy}")
+            # logger.info(f"记录发送: signature={record.signature}, validator={record.validator}, strategy={record.strategy}")
 
     def get_sent_records(self) -> List[TransactionRecord]:
         """获取所有发送记录"""

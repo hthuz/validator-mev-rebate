@@ -19,7 +19,7 @@ class SendStrategy(ABC):
 
     def send_to_validator(self, transaction: BlockTransaction, validator: str) -> TransactionRecord:
         """发送交易到验证者（模拟）"""
-        logger.info(f"[{self.get_strategy_name()}] 发送交易 {transaction.signature} 到 validator {validator}")
+        # logger.info(f"[{self.get_strategy_name()}] 发送交易 {transaction.signature} 到 validator {validator}")
 
         # 这里只是模拟发送，实际环境中会调用真实的发送逻辑
         record = TransactionRecord(

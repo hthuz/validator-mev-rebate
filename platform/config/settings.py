@@ -27,8 +27,9 @@ SANDWICH_PATH = os.getenv("SANDWICH_PATH")
 BLOCK_PATH = os.getenv("BLOCK_PATH")
 SLOT_LEADER_PATH = os.getenv("SLOT_LEADER_PATH")
 
-# Mitigation: 起始 slot 号（slot == block），每次推进 +1
-START_SLOT = int(os.getenv("START_SLOT", "346769956"))
+# Mitigation: slot 范围（inclusive，slot == block），每次推进 +1
+MITIGATION_START_SLOT = int(os.getenv("MITIGATION_START_SLOT", "346769956"))
+MITIGATION_END_SLOT = int(os.getenv("MITIGATION_END_SLOT", "346769956"))
 
 # Mode settings
 DEBUG_MODE = os.getenv("DEBUG_MODE", "False").lower() == "true"

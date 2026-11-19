@@ -20,7 +20,7 @@ def test_server_initialization():
     server1 = create_server(strategy=ImmediateStrategy())
     print(f"   ✓ 服务器创建成功")
     print(f"   - 当前策略: {server1.strategy.get_strategy_name()}")
-    print(f"   - Debug模式: {server1.debug_mode}")
+    print(f"   - Debug模式(仅日志): {server1.debug_mode}")
 
     # 测试创建服务器（使用延迟策略）
     print("\n2. 创建服务器（DelayedStrategy）...")

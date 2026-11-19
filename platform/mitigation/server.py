@@ -1,7 +1,5 @@
-import threading
 from flask import Flask, request, jsonify
 from flask_socketio import SocketIO
-from typing import Dict, Any
 from .transaction_manager import TransactionManager
 from .slot_manager import SlotManager
 from .strategy import ImmediateStrategy, SendStrategy
@@ -20,13 +18,12 @@ class TransactionServer:
 
     slot 机制（事件驱动，无定时器）：
       slot 与 block 是同一个概念（整数 slot 号），跟 blockTime/timestamp 无关。
+      slot 范围由 config 的 MITIGATION_START_SLOT / MITIGATION_END_SLOT 决定（inclusive）。
       1. 进入新 slot -> 广播 new_slot 给 user，告诉它要发送哪个 slot 的交易
       2. user 从 BLOCKS_DATA 取该 slot 的交易并逐笔发送，最后发 end 标识
       3. server 按当前策略处理交易（immediate 策略收到就立刻发给验证者）
       4. 收到 end 标识 -> 处理收尾交易 -> 推进到下一个 slot（+1）-> 回到 1
-
-    Debug 模式下第 4 步多一道手动确认：
-      end + 交易处理完之后，还要按 Enter 或 POST /slot/advance 才推进 slot。
+      5. MITIGATION_END_SLOT 处理完后不再广播 new_slot，只发 simulation_done
     """
 
     def __init__(self, strategy: SendStrategy = None):
@@ -37,31 +34,23 @@ class TransactionServer:
         self.strategy = strategy or ImmediateStrategy()
         self._running = False
 
+        # 仅作信息展示，不影响 slot 推进逻辑
         self.debug_mode = DEBUG_MODE
 
-        # 当前 slot 已收到 end 且交易处理完，等待手动确认才推进（仅 debug 模式使用）
-        self._slot_ready_to_advance = False
-        # 防止 Enter 和 HTTP 端点同时触发推进
-        self._advance_lock = threading.Lock()
-        self._keyboard_thread = None
-
-        # 一开始就指向 START_SLOT，保证 connect 时广播的是有效值
+        # 一开始就指向 MITIGATION_START_SLOT，保证 connect 时广播的是有效值
         self.slot_manager.reset_to_first_slot()
 
         self._register_routes()
         self._register_socket_events()
 
     def _register_routes(self):
-        """注册API路由"""
-
         @self.app.route('/health', methods=['GET'])
         def health():
             return jsonify({
                 'status': 'ok',
                 'current_slot': self.slot_manager.get_current_slot(),
                 'strategy': self.strategy.get_strategy_name(),
-                'debug_mode': self.debug_mode,
-                'waiting_for_confirmation': self._slot_ready_to_advance
+                'debug_mode': self.debug_mode
             })
 
         @self.app.route('/sendTransaction', methods=['POST'])
@@ -79,13 +68,11 @@ class TransactionServer:
                 except (TypeError, ValueError):
                     return jsonify({'error': 'Invalid slot'}), 400
 
-                # ---- end 标识：该 slot 的用户交易全部发送完毕 ----
                 if data.get('end') is True:
                     self.transaction_manager.mark_slot_end(slot)
                     self._on_slot_complete(slot)
                     return jsonify({'status': 'end_accepted', 'slot': slot}), 200
 
-                # ---- 普通交易 ----
                 transaction = BlockTransaction.from_dict(data)
 
                 self.transaction_manager.add_transaction(transaction)
@@ -135,25 +122,6 @@ class TransactionServer:
                 'current_slot': self.slot_manager.get_current_slot()
             })
 
-        @self.app.route('/slot/advance', methods=['POST'])
-        def advance_slot_manual():
-            """debug 模式下手动确认推进 slot（需先收到 end 并处理完交易）"""
-            if not self.debug_mode:
-                return jsonify({'error': 'Not in debug mode'}), 400
-
-            if self._confirm_slot_advance():
-                return jsonify({
-                    'status': 'ok',
-                    'message': 'Slot advanced',
-                    'current_slot': self.slot_manager.get_current_slot()
-                })
-
-            return jsonify({
-                'status': 'waiting',
-                'message': '当前 slot 还未收到 end 标识并处理完交易，无法推进',
-                'current_slot': self.slot_manager.get_current_slot()
-            })
-
     def _register_socket_events(self):
         """注册 Socket.IO 事件"""
 
@@ -193,22 +161,22 @@ class TransactionServer:
 
         for slot in sorted(self.transaction_manager.get_pending_slots()):
             transactions = self.transaction_manager.get_transactions_for_slot(slot)
-            sent_ids = set()
+            sent_signatures = set()
 
             for tx in transactions:
                 if self.strategy.should_send(tx, current_slot):
                     record = self.strategy.send_to_validator(tx, leader)
                     self.transaction_manager.add_sent_record(record)
-                    sent_ids.add(tx.signature)
+                    sent_signatures.add(tx.signature)
 
             # 只移除已发送的，延迟策略未到期的交易继续保留
-            if sent_ids:
-                self.transaction_manager.remove_transactions(slot, sent_ids)
+            if sent_signatures:
+                self.transaction_manager.remove_transactions(slot, sent_signatures)
 
     def _on_slot_complete(self, slot: int) -> None:
         """
         收到 slot 的 end 标识：
-        先按策略处理完交易，再推进到下一个 slot（debug 模式下需等待手动确认）。
+        先按策略处理完交易，再推进到下一个 slot。
         """
         current_slot = self.slot_manager.get_current_slot()
         if slot != current_slot:
@@ -222,39 +190,15 @@ class TransactionServer:
         # 1. 处理完本 slot 收到的交易
         self._process_transactions()
 
-        if self.debug_mode:
-            # Debug 模式：处理完交易后先停住，等 Enter 或 /slot/advance 确认
-            self._slot_ready_to_advance = True
-            logger.info("⏸️  交易已处理完，等待手动确认推进 slot（按 Enter 或 POST /slot/advance）")
-            return
-
-        # 2. 非 debug 模式：直接推进到下一个 slot
+        # 2. 推进到下一个 slot（END slot 处理完后不再广播 new_slot）
         self._advance_and_broadcast()
 
-    def _confirm_slot_advance(self) -> bool:
-        """
-        Debug 模式下的手动确认：按 Enter 或 POST /slot/advance 调用。
-        只有当前 slot 已收到 end 且交易处理完，才会真正推进。
-        """
-        if not self.debug_mode:
-            return False
-
-        with self._advance_lock:
-            if not self._slot_ready_to_advance:
-                logger.info("当前 slot 交易还未接收完毕（未收到 end），不能推进")
-                return False
-
-            logger.info("收到手动确认，推进 slot")
-            self._advance_and_broadcast()
-            return True
-
     def _advance_and_broadcast(self) -> None:
-        """推进到下一个 slot，并广播；同时重置待确认状态"""
+        """推进到下一个 slot 并广播；已到 MITIGATION_END_SLOT 则只发 simulation_done"""
         current_slot = self.slot_manager.get_current_slot()
-        self._slot_ready_to_advance = False
 
         if not self.slot_manager.has_next_slot():
-            logger.info("所有 slot 处理完成，模拟结束")
+            logger.info(f"MITIGATION_END_SLOT ({current_slot}) 处理完成，模拟结束，不再广播 new_slot")
             self._running = False
             self.socketio.emit(SIMULATION_DONE_EVENT, {'last_slot': current_slot})
             return
@@ -266,40 +210,23 @@ class TransactionServer:
 
         self._broadcast_slot()
 
-    def _keyboard_listener(self):
-        """键盘监听线程（debug 模式下按 Enter 确认推进 slot）"""
-        logger.info("键盘监听已启动，按 Enter 确认推进 slot")
-
-        while self._running:
-            try:
-                input()  # 等待 Enter
-                self._confirm_slot_advance()
-            except (EOFError, KeyboardInterrupt):
-                logger.info("没有可用的交互输入，键盘监听结束（仍可用 POST /slot/advance）")
-                break
-            except Exception:
-                break
-
     def set_strategy(self, strategy: SendStrategy):
         """动态切换发送策略"""
         self.strategy = strategy
         logger.info(f"策略切换为: {strategy.get_strategy_name()}")
 
-    def start(self, start_keyboard_listener: bool = True):
-        """启动服务器：slot 推进由 end 标识驱动，debug 模式下还需手动确认"""
+    def start(self):
+        """启动服务器：slot 推进完全由 end 标识驱动"""
         self._running = True
 
         logger.info(f"启动服务器在 {SERVER_HOST}:{SERVER_PORT}")
         logger.info(f"使用策略: {self.strategy.get_strategy_name()}")
+        logger.info(
+            f"Slot 范围: {self.slot_manager.start_slot}-{self.slot_manager.end_slot} (inclusive)"
+        )
+        logger.info("Slot 推进机制: 广播新slot -> user发交易+end -> 处理 -> 推进")
         if self.debug_mode:
-            logger.info("🐛 DEBUG模式已启用: 收到 end 并处理完交易后，需按 Enter 或 POST /slot/advance 才推进 slot")
-            if start_keyboard_listener:
-                self._keyboard_thread = threading.Thread(
-                    target=self._keyboard_listener, daemon=True
-                )
-                self._keyboard_thread.start()
-        else:
-            logger.info("Slot 推进机制: 广播新slot -> user发交易+end -> 处理 -> 推进")
+            logger.info("🐛 DEBUG模式已启用（仅日志详细程度，不影响 slot 推进）")
 
         # Flask-SocketIO 的 run 自带 WSGI 服务器
         self.socketio.run(
