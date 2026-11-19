@@ -3,7 +3,29 @@ import json
 import pytest
 
 from type import BlockTransaction
-from utils import load_block_transactions, parse_block_transactions
+from utils import is_vote_transaction, load_block_transactions, parse_block_transactions
+from config import (
+    VOTE_INSTRUCTION_COUNT,
+    VOTE_PROGRAM,
+    VOTE_PROGRAM_ID,
+    VOTE_INSTRUCTION_TYPE,
+)
+
+
+def _vote_instruction():
+    """构造一笔标准 vote instruction"""
+    return {
+        "program": VOTE_PROGRAM,
+        "programId": VOTE_PROGRAM_ID,
+        "parsed": {"type": VOTE_INSTRUCTION_TYPE, "info": {"towerSync": {}}},
+    }
+
+
+def _vote_tx(sig="vote_sig"):
+    """构造一笔标准 vote 交易的原始 dict"""
+    raw = _raw_tx(sig)
+    raw["transaction"]["message"]["instructions"] = [_vote_instruction()]
+    return raw
 
 
 def _raw_tx(sig="sig_1"):
@@ -115,3 +137,83 @@ def test_real_ref_block(tmp_path):
     assert all(isinstance(tx, BlockTransaction) for tx in txs)
     assert txs[0].signature
     assert txs[0].fee >= 0
+
+    # 默认加载必须已过滤掉 vote 交易
+    assert not any(is_vote_transaction(tx) for tx in txs)
+
+
+# ---------------------------------------------------------------------------
+# vote 交易过滤
+# ---------------------------------------------------------------------------
+
+def test_is_vote_transaction_all_four_features():
+    """四个特征全部满足才判定为 vote"""
+    tx = parse_block_transactions(
+        {"blockTime": 1, "transactions": [_vote_tx()]}, slot=1, skip_vote=False
+    )[0]
+    assert is_vote_transaction(tx)
+
+
+@pytest.mark.parametrize("mutate", [
+    # instructions 数量不为 1
+    lambda insts: insts.append(_vote_instruction()),
+    lambda insts: insts.clear(),
+    # program 不匹配
+    lambda insts: insts[0].update(program="swap"),
+    # programId 不匹配
+    lambda insts: insts[0].update(programId="other"),
+    # type 不匹配
+    lambda insts: insts[0]["parsed"].update(type="transfer"),
+])
+def test_is_vote_transaction_rejects_partial_match(mutate):
+    """只满足部分特征时不应判定为 vote"""
+    insts = [_vote_instruction()]
+    mutate(insts)
+    raw = _raw_tx("partial")
+    raw["transaction"]["message"]["instructions"] = insts
+    tx = parse_block_transactions(
+        {"blockTime": 1, "transactions": [raw]}, slot=1
+    )[0]
+    assert not is_vote_transaction(tx)
+
+
+def test_skip_vote_by_default():
+    """默认加载时跳过 vote 交易"""
+    data = {"blockTime": 1, "transactions": [_raw_tx("normal"), _vote_tx("vote")]}
+    txs = parse_block_transactions(data, slot=1)
+    assert len(txs) == 1
+    assert txs[0].signature == "normal"
+
+
+def test_skip_vote_false_keeps_everything():
+    """skip_vote=False 时保留全部交易"""
+    data = {"blockTime": 1, "transactions": [_raw_tx("normal"), _vote_tx("vote")]}
+    txs = parse_block_transactions(data, slot=1, skip_vote=False)
+    assert len(txs) == 2
+    assert {tx.signature for tx in txs} == {"normal", "vote"}
+
+
+def test_load_block_transactions_skip_vote(tmp_path):
+    """文件级 loader 的 skip_vote 参数生效"""
+    block_file = tmp_path / "block_1.json"
+    block_file.write_text(json.dumps({
+        "blockTime": 1,
+        "transactions": [_vote_tx("vote")],
+    }))
+    assert load_block_transactions(block_file) == []
+    assert len(load_block_transactions(block_file, skip_vote=False)) == 1
+
+
+def test_constants_are_used():
+    """过滤逻辑确实读取公共常量（改常量即改判定结果）"""
+    import utils.utils as utils_mod
+
+    original = utils_mod.VOTE_PROGRAM
+    try:
+        utils_mod.VOTE_PROGRAM = "not_vote"
+        tx = parse_block_transactions(
+            {"blockTime": 1, "transactions": [_vote_tx()]}, slot=1
+        )[0]
+        assert not is_vote_transaction(tx)
+    finally:
+        utils_mod.VOTE_PROGRAM = original

@@ -3,9 +3,19 @@ import os
 import re
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
+if TYPE_CHECKING:
+    from type.models import BlockTransaction
 
 import numpy as np
+
+from config import (
+    VOTE_INSTRUCTION_COUNT,
+    VOTE_PROGRAM,
+    VOTE_PROGRAM_ID,
+    VOTE_INSTRUCTION_TYPE,
+)
 
 
 def find_match_path(auction_path: str, epoch: int) -> str:
@@ -70,9 +80,35 @@ def build_block_index(block_path: str) -> Dict[int, Path]:
 # 区块交易加载（公共：mitigation / sandwich 都可复用）
 # ---------------------------------------------------------------------------
 
+def is_vote_transaction(tx: 'BlockTransaction') -> bool:
+    """
+    判断一笔交易是否为 vote program 交易。
+
+    vote 交易的四个特征（见 config.constants）：
+      1. instructions 恰好一条
+      2. instruction 的 program 是 vote
+      3. programId 是 Vote111111111111111111111111111111111111111
+      4. parsed.type 是 towersync
+
+    四个条件全部满足才算 vote 交易。
+    """
+    instructions = tx.instructions
+    if len(instructions) != VOTE_INSTRUCTION_COUNT:
+        return False
+
+    inst = instructions[0]
+    return (
+        inst.get('program') == VOTE_PROGRAM
+        and inst.get('programId') == VOTE_PROGRAM_ID
+        and inst.get('parsed', {}).get('type') == VOTE_INSTRUCTION_TYPE
+    )
+
+
 def parse_block_transactions(
-    block_data: Dict[str, Any], slot: Optional[int] = None
-) -> List[Any]:
+    block_data: Dict[str, Any],
+    slot: Optional[int] = None,
+    skip_vote: bool = True,
+) -> List['BlockTransaction']:
     """
     从区块 JSON（dict）里提取交易，只保留 BlockTransaction 定义的字段。
 
@@ -83,9 +119,11 @@ def parse_block_transactions(
     slot 解析优先级：显式参数 > JSON 里的 slot 字段。
     两者都没有时抛 ValueError（调用方可用文件名解析后显式传入）。
 
+    Args:
+        skip_vote: 默认 True，跳过 vote program 交易；传 False 保留全部交易。
+
     Returns:
-        List[BlockTransaction]；返回 Any 只是为了避免公共层循环导入，
-        实际元素类型见 type.models.BlockTransaction。
+        List[BlockTransaction]
     """
     # 延迟导入：type.validator 会 import utils，模块级导入会形成循环依赖
     from type.models import BlockTransaction
@@ -105,7 +143,7 @@ def parse_block_transactions(
         tx_meta = raw_tx.get('meta', {}) or {}
         message = tx_body.get('message', {}) or {}
 
-        transactions.append(BlockTransaction(
+        tx = BlockTransaction(
             slot=int(slot),
             timestamp=timestamp,
             signatures=tx_body.get('signatures', []),
@@ -115,19 +153,29 @@ def parse_block_transactions(
             postBalances=tx_meta.get('postBalances', []),
             instructions=message.get('instructions', []),
             logMessages=tx_meta.get('logMessages', []),
-        ))
+        )
+
+        if skip_vote and is_vote_transaction(tx):
+            continue
+
+        transactions.append(tx)
 
     return transactions
 
 
 def load_block_transactions(
-    block_file: Any, slot: Optional[int] = None
-) -> List[Any]:
+    block_file: Any,
+    slot: Optional[int] = None,
+    skip_vote: bool = True,
+) -> List['BlockTransaction']:
     """
     从区块 JSON 文件加载交易。
 
     slot 默认从文件名解析（block_346769956.json -> 346769956），
     也可显式传入；显式传入优先。
+
+    Args:
+        skip_vote: 默认 True，跳过 vote program 交易；传 False 保留全部交易。
 
     Returns:
         List[BlockTransaction]
@@ -141,4 +189,4 @@ def load_block_transactions(
     with open(path, 'r') as f:
         block_data = json.load(f)
 
-    return parse_block_transactions(block_data, slot=slot)
+    return parse_block_transactions(block_data, slot=slot, skip_vote=skip_vote)

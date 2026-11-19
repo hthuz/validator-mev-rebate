@@ -1,5 +1,6 @@
 # Config module
 from .settings import *
+from .constants import *
 
 __all__ = [
     'SOLANA_BIN',
@@ -19,4 +20,8 @@ __all__ = [
     'DEBUG_MODE',
     'SERVER_HOST',
     'SERVER_PORT',
+    'VOTE_INSTRUCTION_COUNT',
+    'VOTE_PROGRAM',
+    'VOTE_PROGRAM_ID',
+    'VOTE_INSTRUCTION_TYPE',
 ]
