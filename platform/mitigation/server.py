@@ -1,39 +1,47 @@
-from flask import Flask, request, jsonify
+from dataclasses import replace
+from typing import Optional
+
+from flask import Flask
 from flask_socketio import SocketIO
+
 from .transaction_manager import TransactionManager
 from .slot_manager import SlotManager
 from .risk_store import ValidatorRiskStore
 from .strategy import ImmediateStrategy, SendStrategy, StrategyContext, RiskAwareStrategy
+from .routes import (
+    NEW_SLOT_EVENT,
+    SIMULATION_DONE_EVENT,
+    register_routes,
+    register_socket_events,
+    broadcast_slot,
+)
 from type.models import BlockTransaction
 from config import SERVER_HOST, SERVER_PORT, DEBUG_MODE
 from log import server_logger as logger
 
-# 事件名
-NEW_SLOT_EVENT = 'new_slot'
-SIMULATION_DONE_EVENT = 'simulation_done'
-
 
 class TransactionServer:
     """
-    交易接收服务器。
+    交易处理核心（业务函数层）。
 
-    slot 机制（事件驱动，无定时器）：
-      slot 与 block 是同一个概念（整数 slot 号），跟 blockTime/timestamp 无关。
-      slot 范围由 config 的 MITIGATION_START_SLOT / MITIGATION_END_SLOT 决定（inclusive）。
-      1. 进入新 slot -> 广播 new_slot 给 user，告诉它要发送哪个 slot 的交易
-      2. user 从 BLOCKS_DATA 取该 slot 的交易并逐笔发送，最后发 end 标识
-      3. server 按当前策略处理交易（immediate 策略收到就立刻发给验证者）
-      4. 收到 end 标识 -> 处理收尾交易 -> 推进到下一个 slot（+1）-> 回到 1
-      5. MITIGATION_END_SLOT 处理完后不再广播 new_slot，只发 simulation_done
+    这里只放业务函数，不关心请求是 HTTP / Socket.IO 过来的，还是 sim 直接函数调用过来的：
+      - set_slot / submit_transaction / close_slot / advance_slot 驱动单个 slot 的生命周期
+      - process 按当前策略决定哪些交易可以发给当前 leader
+      - get_report 等查询函数返回纯 dict，由适配层决定怎么序列化
+
+    slot 与 block 是同一个概念（整数 slot 号），范围由 config 的
+    MITIGATION_START_SLOT / MITIGATION_END_SLOT 决定（inclusive），每次推进 +1。
+
+    with_transport=True（默认）时额外创建 Flask / Socket.IO 并注册路由，供原有
+    server + client 模式使用；with_transport=False 时只保留业务 core，供 sim 使用。
     """
 
     def __init__(
         self,
         strategy: SendStrategy = None,
         risk_store: ValidatorRiskStore = None,
+        with_transport: bool = True,
     ):
-        self.app = Flask(__name__)
-        self.socketio = SocketIO(self.app, cors_allowed_origins="*", async_mode="threading")
         self.transaction_manager = TransactionManager()
         self.slot_manager = SlotManager()
         self.strategy = strategy or ImmediateStrategy()
@@ -47,8 +55,17 @@ class TransactionServer:
         self.slot_manager.reset_to_first_slot()
         self._apply_strategy_context(self.strategy)
 
-        self._register_routes()
-        self._register_socket_events()
+        self.with_transport = with_transport
+        if with_transport:
+            self.app = Flask(__name__)
+            self.socketio = SocketIO(
+                self.app, cors_allowed_origins="*", async_mode="threading"
+            )
+            register_routes(self.app, self)
+            register_socket_events(self.socketio, self)
+        else:
+            self.app = None
+            self.socketio = None
 
     def _apply_strategy_context(self, strategy: SendStrategy) -> None:
         """给策略注入 leader 查询与风险存储；只有 risk-aware 策略才加载历史数据。"""
@@ -60,112 +77,74 @@ class TransactionServer:
             risk_store=self.risk_store,
         ))
 
-    def _register_routes(self):
-        @self.app.route('/health', methods=['GET'])
-        def health():
-            return jsonify({
-                'status': 'ok',
-                'current_slot': self.slot_manager.get_current_slot(),
-                'strategy': self.strategy.get_strategy_name(),
-                'debug_mode': self.debug_mode
-            })
+    # ------------------------------------------------------------------
+    # 业务函数：slot 生命周期
+    # ------------------------------------------------------------------
+    def set_slot(self, slot: int) -> int:
+        """把当前 slot 设为指定值（sim 由自己的循环驱动，无需广播）"""
+        self.slot_manager.set_current_slot(slot)
+        return slot
 
-        @self.app.route('/sendTransaction', methods=['POST'])
-        def send_transaction():
-            """接收用户发送的交易，或 slot 的 end 标识"""
-            try:
-                data = request.get_json()
-                if not data:
-                    return jsonify({'error': 'No data provided'}), 400
+    def get_current_slot(self) -> int:
+        return self.slot_manager.get_current_slot()
 
-                if 'slot' not in data:
-                    return jsonify({'error': 'Missing required field: slot'}), 400
-                try:
-                    slot = int(data['slot'])
-                except (TypeError, ValueError):
-                    return jsonify({'error': 'Invalid slot'}), 400
+    def submit_transaction(
+        self, transaction: BlockTransaction, slot: Optional[int] = None
+    ) -> bool:
+        """接收一笔交易并按当前策略尝试发送。"""
+        if slot is not None and slot != transaction.slot:
+            transaction = replace(transaction, slot=slot)
+        self.transaction_manager.add_transaction(transaction)
+        self.process()
+        return True
 
-                if data.get('end') is True:
-                    self.transaction_manager.mark_slot_end(slot)
-                    self._on_slot_complete(slot)
-                    return jsonify({'status': 'end_accepted', 'slot': slot}), 200
+    def close_slot(self, slot: int) -> None:
+        """标记该 slot 交易接收完毕并处理；不推进 slot，也不广播。"""
+        self.transaction_manager.mark_slot_end(slot)
+        self.process()
 
-                transaction = BlockTransaction.from_dict(data)
+    def complete_slot(self, slot: int) -> None:
+        """HTTP 兼容路径：处理完当前 slot 后推进并广播。"""
+        current_slot = self.get_current_slot()
+        if slot != current_slot:
+            logger.warning(
+                f"收到 slot {slot} 的 end 标识，但当前 slot 是 {current_slot}，忽略"
+            )
+            return
 
-                self.transaction_manager.add_transaction(transaction)
+        logger.info(f"========== Slot {current_slot} 交易接收完成 ==========")
+        self.close_slot(slot)
+        self._advance_and_broadcast()
 
-                # 按策略处理。immediate 策略在这里就会立刻发送给验证者，
-                # 不用等到 slot 推进。
-                self._process_transactions()
+    def _on_slot_complete(self, slot: int) -> None:
+        """旧调用点兼容"""
+        self.complete_slot(slot)
 
-                return jsonify({
-                    'status': 'accepted',
-                    'signature': transaction.signature,
-                    'slot': transaction.slot
-                }), 200
+    def advance_slot(self) -> int:
+        """纯业务推进：slot +1 后处理到期的延迟交易，不广播。"""
+        next_slot = self.slot_manager.advance_slot()
+        self.process()
+        return next_slot
 
-            except Exception as e:
-                return jsonify({'error': str(e)}), 500
+    def _advance_and_broadcast(self) -> None:
+        """HTTP 路径：推进 slot 并广播；到 END 则只发 simulation_done。"""
+        current_slot = self.get_current_slot()
 
-        @self.app.route('/transactions/pending', methods=['GET'])
-        def get_pending():
-            pending_slots = self.transaction_manager.get_pending_slots()
-            return jsonify({
-                'pending_slots': sorted(list(pending_slots)),
-                'count': len(pending_slots)
-            })
+        if not self.slot_manager.has_next_slot():
+            logger.info(
+                f"MITIGATION_END_SLOT ({current_slot}) 处理完成，模拟结束，不再广播 new_slot"
+            )
+            self._running = False
+            if self.socketio is not None:
+                self.socketio.emit(SIMULATION_DONE_EVENT, {'last_slot': current_slot})
+            return
 
-        @self.app.route('/transactions/sent', methods=['GET'])
-        def get_sent():
-            """发送概况：未延迟只计数，延迟交易保留详情并给出统计"""
-            return jsonify(self.transaction_manager.get_report())
+        self.advance_slot()
+        self._broadcast_slot()
 
-        @self.app.route('/risk/summary', methods=['GET'])
-        def get_risk_summary():
-            """查看历史 epoch 范围、阈值、高风险 validator 列表"""
-            if self.risk_store is None:
-                return jsonify({'loaded': False})
-            return jsonify({'loaded': True, **self.risk_store.summary()})
-
-        @self.app.route('/slot/current', methods=['GET'])
-        def get_current_slot():
-            """获取当前 slot"""
-            return jsonify({
-                'current_slot': self.slot_manager.get_current_slot()
-            })
-
-    def _register_socket_events(self):
-        """注册 Socket.IO 事件"""
-
-        @self.socketio.on('connect')
-        def on_connect(auth=None):
-            sid = request.sid
-            logger.info(f"User 已连接 (sid={sid})，发送当前 slot")
-            # user 一连上来就告诉它当前 slot，保证链路能启动。
-            # 后续新 slot 由 _broadcast_slot 广播给所有连接的 user。
-            self._broadcast_slot(to=sid)
-
-        @self.socketio.on('disconnect')
-        def on_disconnect():
-            logger.info("User 已断开连接")
-
-    def _broadcast_slot(self, to: str = None) -> None:
-        """广播新的 slot 给 user"""
-        slot = self.slot_manager.get_current_slot()
-        payload = {
-            'slot': slot,
-            'leader': self.slot_manager.get_leader(slot),
-        }
-        if to is None:
-            self.socketio.emit(NEW_SLOT_EVENT, payload)
-            logger.info(f"广播新 slot: {slot}")
-        else:
-            self.socketio.emit(NEW_SLOT_EVENT, payload, to=to)
-            logger.info(f"向 {to} 发送当前 slot: {slot}")
-
-    def _process_transactions(self) -> None:
-        """按当前策略把到期的交易发送给验证者"""
-        current_slot = self.slot_manager.get_current_slot()
+    def process(self) -> None:
+        """按当前策略把到期的交易发送给当前 slot 的 leader。"""
+        current_slot = self.get_current_slot()
         leader = self.slot_manager.get_leader(current_slot)
         if not leader or leader == "unknown":
             logger.debug(f"Slot {current_slot} 没有对应的 leader")
@@ -185,42 +164,41 @@ class TransactionServer:
             if sent_signatures:
                 self.transaction_manager.remove_transactions(slot, sent_signatures)
 
-    def _on_slot_complete(self, slot: int) -> None:
-        """
-        收到 slot 的 end 标识：
-        先按策略处理完交易，再推进到下一个 slot。
-        """
-        current_slot = self.slot_manager.get_current_slot()
-        if slot != current_slot:
-            logger.warning(
-                f"收到 slot {slot} 的 end 标识，但当前 slot 是 {current_slot}，忽略"
-            )
+    def _process_transactions(self) -> None:
+        """旧调用点兼容"""
+        self.process()
+
+    def _broadcast_slot(self, to: str = None) -> None:
+        """传输层委托；sim 模式下没有 socketio，直接跳过。"""
+        if self.socketio is None:
             return
+        broadcast_slot(self, to=to)
 
-        logger.info(f"========== Slot {current_slot} 交易接收完成 ==========")
+    # ------------------------------------------------------------------
+    # 业务函数：查询（返回纯 dict）
+    # ------------------------------------------------------------------
+    def get_health(self) -> dict:
+        return {
+            'status': 'ok',
+            'current_slot': self.get_current_slot(),
+            'strategy': self.strategy.get_strategy_name(),
+            'debug_mode': self.debug_mode,
+        }
 
-        # 1. 处理完本 slot 收到的交易
-        self._process_transactions()
+    def get_pending(self) -> dict:
+        pending_slots = self.transaction_manager.get_pending_slots()
+        return {
+            'pending_slots': sorted(list(pending_slots)),
+            'count': len(pending_slots),
+        }
 
-        # 2. 推进到下一个 slot（END slot 处理完后不再广播 new_slot）
-        self._advance_and_broadcast()
+    def get_report(self) -> dict:
+        return self.transaction_manager.get_report()
 
-    def _advance_and_broadcast(self) -> None:
-        """推进到下一个 slot 并广播；已到 MITIGATION_END_SLOT 则只发 simulation_done"""
-        current_slot = self.slot_manager.get_current_slot()
-
-        if not self.slot_manager.has_next_slot():
-            logger.info(f"MITIGATION_END_SLOT ({current_slot}) 处理完成，模拟结束，不再广播 new_slot")
-            self._running = False
-            self.socketio.emit(SIMULATION_DONE_EVENT, {'last_slot': current_slot})
-            return
-
-        self.slot_manager.advance_slot()
-
-        # 新 slot 下，延迟策略里到期的交易可以发送
-        self._process_transactions()
-
-        self._broadcast_slot()
+    def get_risk_summary(self) -> dict:
+        if self.risk_store is None:
+            return {'loaded': False}
+        return {'loaded': True, **self.risk_store.summary()}
 
     def set_strategy(self, strategy: SendStrategy):
         """动态切换发送策略"""
@@ -229,7 +207,10 @@ class TransactionServer:
         logger.info(f"策略切换为: {strategy.get_strategy_name()}")
 
     def start(self):
-        """启动服务器：slot 推进完全由 end 标识驱动"""
+        """启动 HTTP/Socket.IO 服务器；slot 推进完全由 end 标识驱动。"""
+        if not self.with_transport:
+            raise RuntimeError("当前 server 以 with_transport=False 创建，不能调用 start()")
+
         self._running = True
 
         logger.info(f"启动服务器在 {SERVER_HOST}:{SERVER_PORT}")
@@ -241,7 +222,6 @@ class TransactionServer:
         if self.debug_mode:
             logger.info("DEBUG模式已启用（仅日志详细程度，不影响 slot 推进）")
 
-        # Flask-SocketIO 的 run 自带 WSGI 服务器
         self.socketio.run(
             self.app,
             host=SERVER_HOST,
@@ -252,15 +232,21 @@ class TransactionServer:
     def stop(self):
         """停止服务器"""
         self._running = False
-        self.socketio.stop()
+        if self.socketio is not None:
+            self.socketio.stop()
 
 
 def create_server(
     strategy: SendStrategy = None,
     risk_store: ValidatorRiskStore = None,
+    with_transport: bool = True,
 ) -> TransactionServer:
-    """工厂函数：创建服务器实例"""
-    return TransactionServer(strategy=strategy, risk_store=risk_store)
+    """工厂函数：创建服务器实例。sim 传 with_transport=False 只拿业务 core。"""
+    return TransactionServer(
+        strategy=strategy,
+        risk_store=risk_store,
+        with_transport=with_transport,
+    )
 
 
 if __name__ == "__main__":

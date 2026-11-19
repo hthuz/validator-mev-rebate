@@ -2,55 +2,82 @@
 
 ## 概述
 
-Mitigation模块是一个模拟交易发送策略的平台，用于研究和测试不同的交易发送时机对sandwich攻击缓解的效果。
+Mitigation 模块用于模拟不同交易发送策略对 sandwich 攻击的缓解效果。提供两种运行方式：
 
-## Slot 机制（事件驱动）
+- **`python -m mitigation.sim`（推荐）**：进程内模拟，直接调用 server 与 client 的业务函数，不启动 HTTP/Socket.IO，由 sim 自己推进 slot，结束后把交易处理概况打印到终端。
+- **server + client**：保留原有的 HTTP + Socket.IO 链路，用于交互式验证和联调。
+
+两条入口共用同一份业务函数（`TransactionServer`），策略、阈值、slot 范围全部从 config 读取，CLI 不接受任何参数。
+
+## 架构分层
+
+```
+HTTP / Socket.IO 适配层      mitigation/routes.py
+                                  │ 解析请求 → 调业务函数 → 包装响应
+                                  ▼
+业务函数层（唯一实现）        mitigation/server.py  TransactionServer
+                              ├─ transaction_manager.py  计数 / 延迟详情 / 报表
+                              ├─ slot_manager.py         slot 号 → leader
+                              └─ strategy/               策略 + 风险注入
+                                  ▲
+                                  │ 直接函数调用，无网络
+进程内模拟入口                mitigation/sim.py
+                              └─ user/replay.py  BlockReplaySource（区块加载，与 client 共用）
+```
+
+`TransactionServer` 的业务函数：
+- `set_slot(slot)` / `submit_transaction(tx)` / `close_slot(slot)` / `advance_slot()` 驱动 slot 生命周期
+- `process()` 按策略判定发送
+- `get_report()` / `get_pending()` / `get_risk_summary()` / `get_health()` 返回纯 dict
+
+`with_transport=False` 时 server 不创建 Flask/Socket.IO 对象，供 sim 使用；默认值 `True` 保持原有 server 行为。
+
+## Slot 机制
 
 **slot 就是 slot 号（等于 block 号，整数），跟 blockTime/timestamp 没有任何关系。** 真实链上 400ms 一个 slot，但这里是历史交易回放模拟——一个 slot 的交易处理完就跳到下一个 slot，与时间无关。
 
-server 记录的 slot 表示「user 需要发送这个 slot 的交易」。整条链路没有定时器，完全由事件驱动：
+slot 范围由 `MITIGATION_START_SLOT` / `MITIGATION_END_SLOT` 决定（两端 inclusive），每次固定 +1。
+
+**server + client 模式**由事件驱动：
 
 ```
 1. server 进入新 slot（从 MITIGATION_START_SLOT 开始，每次 +1）
        ↓  Socket.IO 广播 new_slot {slot, leader}
-2. user 收到广播，从 BLOCKS_DATA 取该 slot 的交易
+2. user 收到广播，从区块数据取该 slot 的交易
        ↓  逐笔 POST /sendTransaction
 3. server 收到交易后立即按当前策略处理
-   （immediate 策略：收到就立刻发给验证者，不等 slot 推进）
        ↓  user 发 end 标识：{"slot": slot, "end": true}
-4. server 收到 end → 处理收尾交易 → 推进到下一个 slot（slot + 1）→ 回到 1
-5. MITIGATION_END_SLOT 处理完后，不再广播 new_slot，只发 simulation_done
+4. server 收到 end → 处理收尾交易 → 推进到下一个 slot → 回到 1
+5. MITIGATION_END_SLOT 处理完后只发 simulation_done
 ```
 
-关键点：
-- **slot 就是 slot 号**，范围由 `MITIGATION_START_SLOT` / `MITIGATION_END_SLOT` 决定（两端 inclusive），每次固定 +1，与 blockTime 无关。
-- **不再 sleep 固定时间后推进 slot**，收到 `end` 且处理完交易才推进。
-- **immediate 策略在收到交易时就发给验证者**，不用等到 slot 推进。
-- 非当前 slot 的 `end` 标识会被忽略。
-- **END slot 处理完后不再广播 new_slot**，只发 `simulation_done`；slot 也不会再推进。
+**sim 模式**没有广播和 end 消息，slot 循环由 `run_simulation()` 自己的 for 循环驱动：
 
-## 功能特性
-
-- **交易接收与管理**: 通过HTTP API接收用户交易
-- **Slot模拟**: 基于 slot 号的事件驱动 slot 推进
-- **多策略支持**:
-  - ImmediateStrategy: 收到交易立即发送
-  - DelayedStrategy: 延迟 N 个 slot 发送
-  - RiskAwareStrategy: 基于历史 epoch 的 validator sandwich ratio 跳过高风险 leader
-- **Socket.IO 广播**: server 进入新 slot 时广播给 user
+```
+for slot in config 的 slot 范围:
+    server.set_slot(slot)
+    for tx in replay.transactions_for(slot):
+        server.submit_transaction(tx)
+    server.close_slot(slot)
+```
 
 ## 配置驱动
 
-**CLI 不接受任何参数**。策略及所有相关参数统一从 `config/settings.py` 读取（可由 `.env` 覆盖）。
+**CLI 不接受任何参数**。所有参数从 `config/settings.py` 读取（可由 `.env` 覆盖）。
 
 ```env
+MITIGATION_START_SLOT=346769956
+MITIGATION_END_SLOT=346769958
+BLOCK_PATH=/path/to/processed_blocks
+SLOT_LEADER_PATH=/path/to/slot_leaders.csv
+
 # immediate / delayed / risk-aware
 MITIGATION_STRATEGY=risk-aware
 # 仅 delayed 策略使用
 MITIGATION_DELAY_SLOTS=1
 ```
 
-`build_strategy_from_config()` 负责按 `MITIGATION_STRATEGY` 构造策略；`mitigation/scripts/run.py`、`python -m mitigation.server` 和 `start.sh` 都走这条路径。未知策略名会直接抛 `ValueError`。
+`build_strategy_from_config()` 按 `MITIGATION_STRATEGY` 构造策略；sim、`run.py`、`python -m mitigation.server`、`start.sh` 四条路径都走这条路径。未知策略名会直接抛 `ValueError`。
 
 ## RiskAwareStrategy
 
@@ -60,7 +87,7 @@ server 维护一个历史 epoch 范围（默认 800-801）内各 validator 的 s
 - 任意一个历史 epoch 的 ratio **严格大于** `SANDWICH_RATIO_THRESHOLD`（默认 0.5）→ 该 validator 为高风险。
 - NaN / 无数据的 validator 视为安全。
 - 当前 slot 的 leader 高风险时继续持有交易；遇到安全 leader 立即发送。
-- 一直高风险且达到 `MITIGATION_MAX_SKIP_SLOTS` 时，在当前 slot 强制发送。
+- 一直高风险且达到 `MITIGATION_MAX_SKIP_SLOTS`（默认 10）时，在当前 slot 强制发送。
 
 相关配置项：
 
@@ -71,58 +98,33 @@ SANDWICH_RATIO_THRESHOLD=0.5
 MITIGATION_MAX_SKIP_SLOTS=10
 ```
 
-## 架构
+使用 risk-aware 策略时还需配置 ClickHouse（读历史 sandwich ratio）。加载失败只 warning 并视为空风险集，所以启动时务必看风险摘要——sim 会直接打印，server 模式访问 `GET /risk/summary`。
 
-```
-mitigation/
-├── server.py               # Flask + Socket.IO 服务器
-├── slot_manager.py         # Slot 管理器（slot 号 -> leader）
-├── transaction_manager.py  # 交易管理器（含 end 标识）
-├── risk_store.py           # 历史 epoch sandwich ratio 存储与风险判定
-├── strategy/               # 策略模块
-│   ├── base_strategy.py    # 含 StrategyContext（leader 查询 + 风险存储注入）
-│   ├── immediate_strategy.py
-│   ├── delayed_strategy.py
-│   ├── risk_aware_strategy.py
-│   └── factory.py          # 按 config 构造策略
-├── user/
-│   └── client.py           # 用户客户端（广播驱动 + BLOCKS_DATA）
-├── docx/
-├── tests/
-└── scripts/
-```
+质押维度暂未接入。
 
 ## 快速开始
 
-### 1. 安装依赖
+### 1. 安装依赖并配置
 
 ```bash
 uv sync
 ```
 
-### 2. 配置环境变量
-
-`.env` 中至少包含：
-
-```env
-BLOCK_PATH=/path/to/processed_blocks
-SLOT_LEADER_PATH=/path/to/slot_leaders.csv
-MITIGATION_START_SLOT=346769956
-MITIGATION_END_SLOT=346769958
-MITIGATION_STRATEGY=risk-aware
-SERVER_HOST=0.0.0.0
-SERVER_PORT=5000
-```
-
-使用 risk-aware 策略时还需配置 ClickHouse（读历史 sandwich ratio）以及上一节中的四个 strategy 配置项。
-
-`MITIGATION_START_SLOT` / `MITIGATION_END_SLOT` 决定 slot 范围（inclusive），slot 每次推进固定 +1。
-`MITIGATION_START_SLOT` 不能大于 `MITIGATION_END_SLOT`，否则 `SlotManager` 初始化会报错。
+`.env` 中至少包含上一节列出的 slot 范围、数据路径与策略配置。`MITIGATION_START_SLOT` 不能大于 `MITIGATION_END_SLOT`，否则 `SlotManager` 初始化会报错。
 
 区块文件名形如 `block_346769956.json`，slot 号直接从文件名解析，与文件内的 blockTime 无关。
 
-### 3. 启动 server
+### 2. 跑 sim（推荐）
 
+```bash
+uv run python -m mitigation.sim
+```
+
+sim 不启动 server、不需要 client、不走网络。启动时打印风险数据概况，slot 循环跑完后打印交易处理概况，格式见下方 `GET /transactions/sent`。
+
+### 3. 跑 server + client（兼容路径）
+
+终端 1：
 ```bash
 uv run python mitigation/scripts/run.py
 # 或
@@ -131,17 +133,36 @@ uv run python -m mitigation.server
 bash mitigation/scripts/start.sh
 ```
 
-三条路径使用同一份 config。切换策略只需修改 `.env` 的 `MITIGATION_STRATEGY`，无需传命令行参数。
-
-启动后可先访问 `GET /risk/summary` 确认历史 epoch 是否加载成功、阈值和高风险 validator 列表是否符合预期。
-
-### 4. 启动 user（另一个终端）
-
+终端 2：
 ```bash
 uv run python -m mitigation.user.client
 ```
 
-user 连接 server 后会收到当前 slot 广播，然后自动进入「收广播 → 发该 slot 交易 → 发 end」循环。server 处理完 `MITIGATION_END_SLOT` 后会发出 `simulation_done` 事件，user 自动断开。
+user 连接 server 后会收到当前 slot 广播，自动进入「收广播 → 发该 slot 交易 → 发 end」循环。server 处理完 `MITIGATION_END_SLOT` 后会发出 `simulation_done`，user 自动断开。
+
+## 文件结构
+
+```
+mitigation/
+├── sim.py                  # 进程内模拟入口
+├── server.py               # TransactionServer 业务 core
+├── routes.py               # HTTP / Socket.IO 适配层
+├── slot_manager.py         # Slot 管理器（slot 号 -> leader）
+├── transaction_manager.py  # 交易管理器（计数 / 延迟详情 / 报表）
+├── risk_store.py           # 历史 epoch sandwich ratio 存储与风险判定
+├── strategy/               # 策略模块
+│   ├── base_strategy.py    # 含 StrategyContext（leader 查询 + 风险存储注入）
+│   ├── immediate_strategy.py
+│   ├── delayed_strategy.py
+│   ├── risk_aware_strategy.py
+│   └── factory.py          # 按 config 构造策略
+├── user/
+│   ├── client.py           # 用户客户端（广播驱动）
+│   └── replay.py           # BlockReplaySource（区块加载，sim 共用）
+├── docx/
+├── tests/
+└── scripts/
+```
 
 ## API接口
 
@@ -242,3 +263,5 @@ user 连接 server 后会收到当前 slot 广播，然后自动进入「收广�
 ```bash
 uv run python -m pytest tests/ mitigation/tests/
 ```
+
+`test_sim.py` 覆盖 sim 与 HTTP 路径报告一致性、config slot 范围、风险跳过场景。

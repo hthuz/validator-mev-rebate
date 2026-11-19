@@ -3,20 +3,21 @@ User module for simulating transaction sending by replaying historical blocks.
 
 新的 slot 机制：
   - user 连接 server 后监听 new_slot 事件（事件名需与 server.py 保持一致）
-  - 收到广播里的 slot 号后，从 BLOCKS_DATA 取该 slot 的交易
+  - 收到广播里的 slot 号后，从区块数据取该 slot 的交易
   - 逐笔发送交易，最后发送 end 标识表示本 slot 交易全部发完
   - 然后等待 server 的下一个 slot 广播
 
+区块加载逻辑放在 user/replay.py 的 BlockReplaySource，sim 与 user 共用。
 交易统一用公共类型 BlockTransaction，从 block JSON 按需加载。
 """
 import requests
 import socketio
-from typing import List, Dict, Any
+from typing import Dict, Any
 
 from config import SERVER_PORT, BLOCK_PATH
 from log import user_logger as logger
 from type.models import BlockTransaction
-from utils import build_block_index, load_block_transactions
+from .replay import BlockReplaySource
 
 NEW_SLOT_EVENT = 'new_slot'
 SIMULATION_DONE_EVENT = 'simulation_done'
@@ -29,23 +30,21 @@ class TransactionUser:
         self.server_url = server_url.rstrip('/')
         self.block_data_path = block_data_path
 
-        # BLOCKS_DATA: slot 号 -> 该 slot 的 BlockTransaction 列表（按需加载并缓存）
-        self.BLOCKS_DATA: Dict[int, List[BlockTransaction]] = {}
-        # slot 号 -> 对应的区块文件路径
-        self._block_index = build_block_index(block_data_path)
+        # 区块加载/缓存是纯业务，交给共用的 BlockReplaySource
+        self._replay = BlockReplaySource(block_data_path)
 
         self._sio = socketio.Client(logger=False, engineio_logger=False)
         self._running = False
         self._register_socket_events()
 
-        if self._block_index:
-            slots = sorted(self._block_index)
-            logger.info(
-                f"加载区块索引完成: slot 范围 {slots[0]}-{slots[-1]}, "
-                f"共 {len(slots)} 个 slot"
-            )
-        else:
-            logger.warning(f"区块数据路径无可用文件: {block_data_path}，将使用测试数据")
+    # 兼容旧调用点：这两个属性仍从 user 实例可见
+    @property
+    def BLOCKS_DATA(self):
+        return self._replay.BLOCKS_DATA
+
+    @property
+    def _block_index(self):
+        return self._replay._block_index
 
     # ------------------------------------------------------------------
     # Socket.IO 事件
@@ -64,48 +63,16 @@ class TransactionUser:
             self._sio.disconnect()
 
     # ------------------------------------------------------------------
-    # 区块数据（按需加载）
+    # 区块数据（委托给 BlockReplaySource）
     # ------------------------------------------------------------------
-    def _generate_test_transactions(self, slot: int) -> List[BlockTransaction]:
-        """没有真实区块数据时的测试交易"""
-        return [
-            BlockTransaction(
-                slot=slot,
-                timestamp=0,
-                signatures=[f'sig_{slot}_{i}'],
-                message={},
-                fee=5000,
-                preBalances=[],
-                postBalances=[],
-                instructions=[],
-                logMessages=[],
-            )
-            for i in range(5)
-        ]
+    def _generate_test_transactions(self, slot: int):
+        return self._replay._generate_test_transactions(slot)
 
-    def _get_transactions_for_slot(self, slot: int) -> List[BlockTransaction]:
-        """从 BLOCKS_DATA 获取指定 slot 的交易（首次访问时加载）"""
-        if slot in self.BLOCKS_DATA:
-            return self.BLOCKS_DATA[slot]
+    def _get_transactions_for_slot(self, slot: int):
+        return self._replay.transactions_for(slot)
 
-        transactions: List[BlockTransaction] = []
-        block_file = self._block_index.get(slot)
-        if block_file is not None:
-            try:
-                transactions = load_block_transactions(block_file, slot=slot)
-            except Exception as e:
-                logger.warning(f"无法加载 {block_file}: {e}")
-
-        if not transactions and not self._block_index:
-            transactions = self._generate_test_transactions(slot)
-
-        self.BLOCKS_DATA[slot] = transactions
-        logger.debug(f"slot {slot}: 从 BLOCKS_DATA 加载 {len(transactions)} 笔交易")
-        return transactions
-
-    def get_available_blocks(self) -> List[int]:
-        """获取所有可用的 slot 号"""
-        return sorted(self._block_index.keys())
+    def get_available_blocks(self):
+        return self._replay.available_slots()
 
     # ------------------------------------------------------------------
     # 发送交易
@@ -151,7 +118,7 @@ class TransactionUser:
 
     def _send_slot_transactions(self, slot: int) -> None:
         """把某个 slot 的全部交易发给 server，然后发 end 标识"""
-        transactions = self._get_transactions_for_slot(slot)
+        transactions = self._replay.transactions_for(slot)
         logger.info(f"slot {slot}: 发送 {len(transactions)} 笔交易")
 
         for tx in transactions:

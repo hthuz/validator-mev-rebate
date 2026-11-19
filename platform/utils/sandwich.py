@@ -188,15 +188,28 @@ def get_sandwich_ratios(epoch: int) -> dict[str, float]:
     }
 
 
+
+def export_to_csv(epoch: int) -> None:
+    """导出指定 epoch 的 sandwich ratio 到 CSV 文件"""
+
+    output_path = f"sandwich_ratios_epoch_{epoch}.csv"
+    info = get_sandwich_info(epoch)
+    with open(output_path, 'w') as f:
+        f.write("validator,slot_num,sandwich_slot_num,sandwich_num,sandwich_ratio\n")
+        for identity, slot_info in info.items():
+            f.write(f"{identity},{slot_info.SlotNum},{slot_info.SandwichSlotNum},{slot_info.SandwichNum},{slot_info.sandwich_ratio()}\n")
+
 if __name__ == "__main__":
-    map = get_sandwich_info(801)
+
+    export_to_csv(800)
+    # map = get_sandwich_info(801)
 
     # sort map by sandwich ratio
-    sorted_map = dict(sorted(map.items(), key=lambda item: item[1].sandwich_ratio(), reverse=True))
+    # sorted_map = dict(sorted(map.items(), key=lambda item: item[1].sandwich_ratio(), reverse=True))
 
     # print sorted map top 100
-    for k, v in list(sorted_map.items())[:100]:
-        print(k,v, v.sandwich_ratio())
+    # for k, v in list(sorted_map.items())[:100]:
+    #     print(k,v, v.sandwich_ratio())
 
     # for k, v in map.items():
     #     print(k,v)
