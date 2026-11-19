@@ -174,6 +174,20 @@ def get_sandwich_info(epoch: int) -> dict[str, SlotInfo]:
     
     return map
 
+
+def get_sandwich_ratios(epoch: int) -> dict[str, float]:
+    """获取指定 epoch 各 validator 的 sandwich ratio。
+
+    ratio 的计算完全复用 SlotInfo.sandwich_ratio()，即
+    SandwichSlotNum / SlotNum；没有出过块的 validator 返回 nan。
+    """
+    info = get_sandwich_info(epoch)
+    return {
+        identity: slot_info.sandwich_ratio()
+        for identity, slot_info in info.items()
+    }
+
+
 if __name__ == "__main__":
     map = get_sandwich_info(801)
 

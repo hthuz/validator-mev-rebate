@@ -2,7 +2,8 @@ from flask import Flask, request, jsonify
 from flask_socketio import SocketIO
 from .transaction_manager import TransactionManager
 from .slot_manager import SlotManager
-from .strategy import ImmediateStrategy, SendStrategy
+from .risk_store import ValidatorRiskStore
+from .strategy import ImmediateStrategy, SendStrategy, StrategyContext, RiskAwareStrategy
 from type.models import BlockTransaction
 from config import SERVER_HOST, SERVER_PORT, DEBUG_MODE
 from log import server_logger as logger
@@ -26,12 +27,17 @@ class TransactionServer:
       5. MITIGATION_END_SLOT 处理完后不再广播 new_slot，只发 simulation_done
     """
 
-    def __init__(self, strategy: SendStrategy = None):
+    def __init__(
+        self,
+        strategy: SendStrategy = None,
+        risk_store: ValidatorRiskStore = None,
+    ):
         self.app = Flask(__name__)
         self.socketio = SocketIO(self.app, cors_allowed_origins="*", async_mode="threading")
         self.transaction_manager = TransactionManager()
         self.slot_manager = SlotManager()
         self.strategy = strategy or ImmediateStrategy()
+        self.risk_store = risk_store
         self._running = False
 
         # 仅作信息展示，不影响 slot 推进逻辑
@@ -39,9 +45,20 @@ class TransactionServer:
 
         # 一开始就指向 MITIGATION_START_SLOT，保证 connect 时广播的是有效值
         self.slot_manager.reset_to_first_slot()
+        self._apply_strategy_context(self.strategy)
 
         self._register_routes()
         self._register_socket_events()
+
+    def _apply_strategy_context(self, strategy: SendStrategy) -> None:
+        """给策略注入 leader 查询与风险存储；只有 risk-aware 策略才加载历史数据。"""
+        if isinstance(strategy, RiskAwareStrategy) and self.risk_store is None:
+            self.risk_store = ValidatorRiskStore()
+
+        strategy.set_context(StrategyContext(
+            get_leader=self.slot_manager.get_leader,
+            risk_store=self.risk_store,
+        ))
 
     def _register_routes(self):
         @self.app.route('/health', methods=['GET'])
@@ -100,20 +117,15 @@ class TransactionServer:
 
         @self.app.route('/transactions/sent', methods=['GET'])
         def get_sent():
-            records = self.transaction_manager.get_sent_records()
-            return jsonify({
-                'records': [
-                    {
-                        'signature': r.signature,
-                        'slot': r.slot,
-                        'validator': r.validator,
-                        'strategy': r.strategy,
-                        'sent_at': r.sent_at
-                    }
-                    for r in records
-                ],
-                'count': len(records)
-            })
+            """发送概况：未延迟只计数，延迟交易保留详情并给出统计"""
+            return jsonify(self.transaction_manager.get_report())
+
+        @self.app.route('/risk/summary', methods=['GET'])
+        def get_risk_summary():
+            """查看历史 epoch 范围、阈值、高风险 validator 列表"""
+            if self.risk_store is None:
+                return jsonify({'loaded': False})
+            return jsonify({'loaded': True, **self.risk_store.summary()})
 
         @self.app.route('/slot/current', methods=['GET'])
         def get_current_slot():
@@ -165,7 +177,7 @@ class TransactionServer:
 
             for tx in transactions:
                 if self.strategy.should_send(tx, current_slot):
-                    record = self.strategy.send_to_validator(tx, leader)
+                    record = self.strategy.send_to_validator(tx, leader, current_slot)
                     self.transaction_manager.add_sent_record(record)
                     sent_signatures.add(tx.signature)
 
@@ -213,6 +225,7 @@ class TransactionServer:
     def set_strategy(self, strategy: SendStrategy):
         """动态切换发送策略"""
         self.strategy = strategy
+        self._apply_strategy_context(strategy)
         logger.info(f"策略切换为: {strategy.get_strategy_name()}")
 
     def start(self):
@@ -226,7 +239,7 @@ class TransactionServer:
         )
         logger.info("Slot 推进机制: 广播新slot -> user发交易+end -> 处理 -> 推进")
         if self.debug_mode:
-            logger.info("🐛 DEBUG模式已启用（仅日志详细程度，不影响 slot 推进）")
+            logger.info("DEBUG模式已启用（仅日志详细程度，不影响 slot 推进）")
 
         # Flask-SocketIO 的 run 自带 WSGI 服务器
         self.socketio.run(
@@ -242,11 +255,16 @@ class TransactionServer:
         self.socketio.stop()
 
 
-def create_server(strategy: SendStrategy = None) -> TransactionServer:
+def create_server(
+    strategy: SendStrategy = None,
+    risk_store: ValidatorRiskStore = None,
+) -> TransactionServer:
     """工厂函数：创建服务器实例"""
-    return TransactionServer(strategy=strategy)
+    return TransactionServer(strategy=strategy, risk_store=risk_store)
 
 
 if __name__ == "__main__":
-    server = create_server()
+    from .strategy import build_strategy_from_config
+
+    server = create_server(strategy=build_strategy_from_config())
     server.start()

@@ -77,10 +77,12 @@ def test_immediate_send_and_end_advances_slot():
     resp = client.post('/sendTransaction', json=_tx_payload(1000, 'sig_1'))
     assert resp.status_code == 200
 
-    records = server.transaction_manager.get_sent_records()
-    assert len(records) == 1
-    assert records[0].signature == 'sig_1'
-    assert records[0].validator == 'validator_a'
+    # 未延迟交易只计数，不留存逐笔详情
+    report = server.transaction_manager.get_report()
+    assert report['total_processed'] == 1
+    assert report['immediate_count'] == 1
+    assert report['delayed_count'] == 0
+    assert report['delayed_records'] == []
     assert server.slot_manager.get_current_slot() == 1000
 
     client.post('/sendTransaction', json={'slot': 1000, 'end': True})
@@ -103,12 +105,14 @@ def test_delayed_strategy_sends_on_slot_advance():
     client = server.app.test_client()
 
     client.post('/sendTransaction', json=_tx_payload(1000, 'sig_delay'))
-    assert len(server.transaction_manager.get_sent_records()) == 0
+    assert server.transaction_manager.get_report()['total_processed'] == 0
 
     client.post('/sendTransaction', json={'slot': 1000, 'end': True})
-    records = server.transaction_manager.get_sent_records()
-    assert len(records) == 1
-    assert records[0].signature == 'sig_delay'
+    report = server.transaction_manager.get_report()
+    assert report['total_processed'] == 1
+    assert report['delayed_count'] == 1
+    assert report['delayed_records'][0]['signature'] == 'sig_delay'
+    assert report['delayed_records'][0]['target_slot'] == 1001
     assert server.slot_manager.get_current_slot() == 1001
 
 

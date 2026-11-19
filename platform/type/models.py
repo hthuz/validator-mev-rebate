@@ -71,7 +71,10 @@ class SlotLeader:
 class TransactionRecord:
     """交易发送记录"""
     signature: str
-    slot: int
-    validator: str
+    slot: int                 # 交易原始 slot
+    validator: str            # 实际发送到的 leader
     strategy: str
     sent_at: float = field(default_factory=lambda: datetime.now().timestamp())
+    target_slot: Optional[int] = None   # 实际落地 slot（模拟推进到的 slot）
+    delay_slots: int = 0                # target_slot - slot
+    leader_risky: bool = False          # 落地 leader 是否为高风险

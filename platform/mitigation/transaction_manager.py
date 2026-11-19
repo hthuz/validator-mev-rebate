@@ -1,19 +1,26 @@
 from typing import Dict, List, Set
-from collections import defaultdict
+from collections import Counter, defaultdict
 import threading
 from type.models import BlockTransaction, TransactionRecord
 from log import transaction_manager_logger as logger
 
 
 class TransactionManager:
-    """管理接收到的交易，以及每个 slot 的结束标识"""
+    """管理接收到的交易、slot 结束标识，以及发送统计。
+
+    未延迟的交易只累加计数，不逐笔留存；延迟交易保留完整记录，
+    用于回答「哪些交易被延迟、从哪个 slot 挪到哪个 slot、延迟了多少」。
+    """
 
     def __init__(self):
         # key 是 slot 号
         self._transactions: Dict[int, List[BlockTransaction]] = defaultdict(list)
         self._ended_slots: Set[int] = set()
         self._lock = threading.Lock()
-        self._sent_records: List[TransactionRecord] = []
+
+        self._sent_count: int = 0
+        self._sent_delay_sum: int = 0
+        self._sent_delayed: List[TransactionRecord] = []
 
     def add_transaction(self, transaction: BlockTransaction) -> None:
         """添加一个交易到队列"""
@@ -61,15 +68,84 @@ class TransactionManager:
                 self._transactions.pop(slot, None)
 
     def add_sent_record(self, record: TransactionRecord) -> None:
-        """记录已发送的交易"""
+        """累计发送计数；只有延迟交易才保留逐笔详情。"""
         with self._lock:
-            self._sent_records.append(record)
-            # logger.info(f"记录发送: signature={record.signature}, validator={record.validator}, strategy={record.strategy}")
+            self._sent_count += 1
+            delay = max(0, record.delay_slots)
+            self._sent_delay_sum += delay
+            if delay > 0:
+                self._sent_delayed.append(record)
 
-    def get_sent_records(self) -> List[TransactionRecord]:
-        """获取所有发送记录"""
+    def get_delayed_records(self) -> List[TransactionRecord]:
+        """获取延迟交易的逐笔详情（拷贝）"""
         with self._lock:
-            return self._sent_records.copy()
+            return self._sent_delayed.copy()
+
+    @staticmethod
+    def _delay_stats(count: int, total: int, minimum: int, maximum: int) -> dict:
+        if count == 0:
+            return {"count": 0, "sum": 0, "avg": 0.0, "min": 0, "max": 0}
+        return {
+            "count": count,
+            "sum": total,
+            "avg": round(total / count, 6),
+            "min": minimum,
+            "max": maximum,
+        }
+
+    def get_report(self) -> dict:
+        """发送概况：总量、延迟详情、延迟分布与 slot 迁移概况。"""
+        with self._lock:
+            delayed = self._sent_delayed.copy()
+            total = self._sent_count
+            delay_sum = self._sent_delay_sum
+
+        delays = [r.delay_slots for r in delayed]
+        delayed_count = len(delayed)
+        immediate_count = total - delayed_count
+
+        # 全部交易里未延迟的记 0，所以最小值在有 immediate 时恒为 0
+        all_min = 0 if immediate_count > 0 else (min(delays) if delays else 0)
+        all_max = max(delays) if delays else 0
+
+        original_counts = Counter(r.slot for r in delayed)
+        target_counts = Counter(r.target_slot for r in delayed)
+        move_counts = Counter((r.slot, r.target_slot) for r in delayed)
+
+        return {
+            "total_processed": total,
+            "immediate_count": immediate_count,
+            "delayed_count": delayed_count,
+            "delay_stats": {
+                "all": self._delay_stats(total, delay_sum, all_min, all_max),
+                "delayed": self._delay_stats(
+                    delayed_count, delay_sum,
+                    min(delays) if delays else 0,
+                    max(delays) if delays else 0,
+                ),
+            },
+            "slot_overview": {
+                "original": {str(slot): count for slot, count in sorted(original_counts.items())},
+                "target": {str(slot): count for slot, count in sorted(target_counts.items())},
+                "moves": [
+                    {"original_slot": original, "target_slot": target, "count": count}
+                    for (original, target), count in sorted(move_counts.items())
+                ],
+            },
+            "delayed_records": [
+                {
+                    "signature": r.signature,
+                    "slot": r.slot,
+                    "target_slot": r.target_slot,
+                    "delay_slots": r.delay_slots,
+                    "validator": r.validator,
+                    "leader_risky": r.leader_risky,
+                    "strategy": r.strategy,
+                    "sent_at": r.sent_at,
+                }
+                for r in delayed
+            ],
+        }
 
     def get_pending_slots(self) -> Set[int]:
         """获取所有有待处理交易的 slot 号"""
@@ -81,4 +157,6 @@ class TransactionManager:
         with self._lock:
             self._transactions.clear()
             self._ended_slots.clear()
-            self._sent_records.clear()
+            self._sent_count = 0
+            self._sent_delay_sum = 0
+            self._sent_delayed.clear()
