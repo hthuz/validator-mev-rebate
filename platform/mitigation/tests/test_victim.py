@@ -10,6 +10,7 @@ from mitigation.evaluation import (
     evaluate_leader_risk_exposure,
     evaluate_victim_outcomes,
     load_risky_validators,
+    load_risky_validators_detail,
     load_sandwich_leaders,
 )
 from mitigation.risk_store import ValidatorRiskStore
@@ -154,9 +155,57 @@ def test_load_risky_validators_threshold_and_nan():
         'safe': 0.2,
     }
     risky = load_risky_validators(
-        802, loader=lambda epoch: ratios, threshold=0.5
+        802,
+        loader=lambda epoch: ratios,
+        threshold=0.5,
+        marinade_loader=lambda epoch: {},
     )
     assert risky == {'bad'}
+
+
+def test_load_risky_validators_unions_marinade():
+    detail = load_risky_validators_detail(
+        802,
+        loader=lambda epoch: {
+            'sw_only': 0.8,
+            'both': 0.7,
+            'edge': 0.5,
+            'nan': float('nan'),
+        },
+        threshold=0.5,
+        marinade_loader=lambda epoch: {
+            'm_only': 0.9,
+            'both': 0.6,
+            'edge': 0.5,
+            'nan_m': float('nan'),
+        },
+        marinade_threshold=0.5,
+    )
+    assert detail['sandwich_risky_validators'] == {'sw_only', 'both'}
+    assert detail['marinade_risky_validators'] == {'m_only', 'both'}
+    assert detail['both_risky_validators'] == {'both'}
+    assert detail['risky_validators'] == {'sw_only', 'both', 'm_only'}
+    assert detail['sandwich_validator_count'] == 4
+    assert detail['marinade_validator_count'] == 4
+    assert detail['sandwich_threshold'] == 0.5
+    assert detail['marinade_threshold'] == 0.5
+
+    # 薄封装返回同一个并集
+    assert load_risky_validators(
+        802,
+        loader=lambda epoch: {'sw_only': 0.8},
+        threshold=0.5,
+        marinade_loader=lambda epoch: {'m_only': 0.9},
+        marinade_threshold=0.5,
+    ) == {'sw_only', 'm_only'}
+
+    # 加载失败只 warning，退化为空集合
+    def _boom(epoch):
+        raise RuntimeError('down')
+
+    assert load_risky_validators(
+        802, loader=_boom, marinade_loader=_boom, threshold=0.5, marinade_threshold=0.5
+    ) == set()
 
 
 def test_leader_risk_exposure_counts_all_sent_transactions():
@@ -171,6 +220,32 @@ def test_leader_risk_exposure_counts_all_sent_transactions():
     assert result['on_safe_leader'] == 3
     assert result['ratios']['on_risky_leader'] == 0.4
     assert result['ratios']['on_safe_leader'] == 0.6
+    assert 'by_source' not in result
+
+
+def test_leader_risk_exposure_by_source():
+    report = {
+        'landed_validators': {
+            'sw': 2,      # 仅 sandwich risky
+            'm': 3,       # 仅 Marinade risky
+            'both': 1,    # 两条线都命中
+            'safe': 4,
+        }
+    }
+    result = evaluate_leader_risk_exposure(
+        report,
+        risky_validators={'sw', 'm', 'both'},
+        sandwich_risky={'sw', 'both'},
+        marinade_risky={'m', 'both'},
+    )
+    assert result['total_sent'] == 10
+    assert result['on_risky_leader'] == 6
+    assert result['on_safe_leader'] == 4
+    # by_source 是重叠细分，不互斥
+    assert result['by_source']['sandwich']['count'] == 3
+    assert result['by_source']['marinade']['count'] == 4
+    assert result['by_source']['both']['count'] == 1
+    assert result['by_source']['marinade']['ratio'] == 0.4
 
 
 def test_leader_risk_exposure_empty():
@@ -186,7 +261,9 @@ def test_risk_store_unions_sandwich_and_marinade():
     # marinade: m_only=0.9, both=0.6, edge=0.5
     store = ValidatorRiskStore(
         start_epoch=800, end_epoch=800,
+        threshold=0.5,
         loader=lambda epoch: {'sw_only': 0.8, 'both': 0.7},
+        marinade_threshold=0.5,
         marinade_loader=lambda epoch: {
             'm_only': 0.9, 'both': 0.6, 'edge': 0.5, 'nan': float('nan'),
         },
@@ -215,7 +292,9 @@ def test_risk_store_unions_sandwich_and_marinade():
 def test_marinade_risk_any_epoch_within_range():
     store = ValidatorRiskStore(
         start_epoch=800, end_epoch=801,
+        threshold=0.5,
         loader=lambda epoch: {},
+        marinade_threshold=0.5,
         marinade_loader=lambda epoch: {
             800: {'early': 0.7},
             801: {'late': 0.9},
@@ -243,7 +322,9 @@ if __name__ == "__main__":
     test_sandwich_leaders_loader_injection()
     test_three_tier_labels()
     test_load_risky_validators_threshold_and_nan()
+    test_load_risky_validators_unions_marinade()
     test_leader_risk_exposure_counts_all_sent_transactions()
+    test_leader_risk_exposure_by_source()
     test_leader_risk_exposure_empty()
     test_risk_store_unions_sandwich_and_marinade()
     test_marinade_risk_any_epoch_within_range()

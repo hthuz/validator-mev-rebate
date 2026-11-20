@@ -54,10 +54,10 @@ victim 交易重放 ──> slot 循环 ──> 当前 slot 的 leader ──> �
                                     ┌─────────────────────────┴────────────────────────┐
                                     │                                                  │
                           验证者风险暴露评估                              三档 sandwich 落地评估
-                    (用 802 自身 risky 集合)                         (用 802 观测到 sandwich 的 leader)
+                  (802 自身 ratio ∪ Marinade 风险集合)               (用 802 观测到 sandwich 的 leader)
 ```
 
-关键设计：**策略输入和评估标签用的是不同 epoch、不同口径的两套风险数据**，刻意不做成同一个，避免"用自己的标签证明自己有效"的循环论证。
+关键设计：**策略输入和评估标签用的是不同 epoch 的风险数据**，刻意不做成同一批，避免"用自己的标签证明自己有效"的循环论证。两者的**判定维度一致**（sandwich ratio ∪ Marinade 质押），但数据取自不同 epoch：策略看历史的 800/801 做决策，评估看 replay epoch 802 自身做留出验证。三档落地评估则是第三个口径——用"802 中观测到 victim sandwich 的 leader"这个更宽的观测集合。
 
 ### 2.2 架构分层
 
@@ -121,10 +121,10 @@ victim 交易重放 ──> slot 循环 ──> 当前 slot 的 leader ──> �
 | 用途 | 数据来源 | 风险集合口径 | 规模（实测） |
 |---|---|---|---|
 | **决策**（策略跳过谁） | 历史 epoch 800 / 801 | sandwich ratio > 0.5 **或** Marinade 质押占比 > 0.5 | sandwich 命中 31、Marinade 命中 1195、并集 1195 |
-| **评估 A**（验证者视角） | replay epoch 802 自身 | ratio 严格 > 0.5 的 validator | 1092 个有数据，其中 **32 个** risky |
+| **评估 A**（验证者视角） | replay epoch 802 自身 | sandwich ratio > 阈值 **或** Marinade 质押占比 > 阈值（与策略同口径，取并集） | 当前配置（sandwich 1.1 / Marinade 0.5）：sandwich 0、Marinade 70、**并集 70**；默认 0.5/0.5 下 ratio 口径为 32 个 |
 | **评估 B**（交易视角） | replay epoch 802 自身 | 观测到 victim sandwich 的 leader | **817 个** |
 
-策略只认历史（800/801）；评估用 802 自身。所以会出现"策略认为安全、但 802 口径算 risky"的情况——这正是留出验证要暴露的差异，不是 bug。评估 A 和评估 B 也不等同：一个是 ratio 超阈值（32 个），一个是观测到过 victim sandwich（817 个，口径宽得多）。
+策略只认历史（800/801）；评估用 802 自身。所以会出现"策略认为安全、但 802 口径算 risky"的情况——这正是留出验证要暴露的差异，不是 bug。评估 A 和评估 B 也不等同：一个是 ratio/质押超阈值（几十个量级），一个是观测到过 victim sandwich（817 个，口径宽得多）。评估 A 内部再按来源分 `sandwich` / `marinade` / `both`，三者可重叠（不是互斥划分）。
 
 ---
 
@@ -193,17 +193,20 @@ print(server.get_report())
 
 ### 5.1 验证者视角：落地 leader 风险暴露
 
-`evaluate_leader_risk_exposure(report, risky_validators)`，统计对象是**全部已发送交易**：
+`evaluate_leader_risk_exposure(report, risky_validators, marinade_risky=None, sandwich_risky=None)`，统计对象是**全部已发送交易**：
 
 | 字段 | 含义 |
 |---|---|
 | `total_sent` | 已发送交易总数 |
-| `on_risky_leader` | 落地 leader 在评估 epoch risky 集合里的笔数 |
-| `on_safe_leader` | 落地 leader 不在 risky 集合里的笔数 |
+| `on_risky_leader` | 落地 leader 在评估 epoch risky **并集**里的笔数 |
+| `on_safe_leader` | 落地 leader 不在并集里的笔数 |
 | `ratios` | 上述两项占比 |
-| `risky_validators_in_epoch` | 评估 epoch 的 risky validator 个数 |
+| `risky_validators_in_epoch` | 评估 epoch 的 risky 并集大小 |
+| `by_source`（可选） | 传入分列集合时出现，按 `marinade` / `sandwich` / `both` 给出 `count` / `ratio` / `risky_validators`。三者可重叠，**不是互斥划分** |
 
-risky 集合由 `load_risky_validators(epoch)` 构造：读该 epoch ratio，严格 > 阈值，NaN/缺失安全，可注入 loader 便于测试。
+risky 集合由 `load_risky_validators(epoch)` 构造：读该 epoch 的 sandwich ratio 与 Marinade 质押占比，各自严格 > 对应阈值（`SANDWICH_RATIO_THRESHOLD` / `MARINADE_STAKE_THRESHOLD`）后取并集；NaN/缺失安全，单个数据源加载失败只 warning 并退化为空集合。需要展示来源时用 `load_risky_validators_detail(epoch)`，它返回分列的集合与计数；`load_risky_validators()` 是只取并集的薄封装。两者都支持注入 `loader` / `marinade_loader` 便于测试。
+
+sim 在 victim 模式下会打印「评估口径 risky 来源」：sandwich / marinade / both / union 的数量，以及 Marinade risky validator 的完整 identity 列表——即"哪些是 marinade 质押导致的 risky"。
 
 ### 5.2 逐笔 victim 三档落地标签
 
@@ -253,25 +256,27 @@ victim 改道到另一个 slot 后，**历史区块里从来没有这笔交易**
 ### 7.1 测试
 
 ```
-python -m pytest tests/ mitigation/tests/ -q   →  55 passed
+python -m pytest tests/ mitigation/tests/ -q   →  57 passed
 ```
 
-覆盖：阈值边界（0.5 不算、0.6 算）、NaN / 缺失、epoch 范围、连续跳过、窗口强制发送、无上下文回退、sim 与 HTTP report 一致性、victim 去重、三档标签、验证者风险暴露统计、sandwich/Marinade 并集判定与来源分列等。
+覆盖：阈值边界（0.5 不算、0.6 算）、NaN / 缺失、epoch 范围、连续跳过、窗口强制发送、无上下文回退、sim 与 HTTP report 一致性、victim 去重、三档标签、验证者风险暴露统计、sandwich/Marinade 并集判定与来源分列、评估侧 risky 集合的 Marinade 并集与 `by_source` 细分等。
 
 > 必须用 `python -m pytest`（把项目根加入 sys.path）。裸 `pytest` 在 `tests/test_block_tx_loader.py` 的 `from type import ...` 上报 collection 错误——这是既有问题，非本次引入。
 
 ### 7.2 真实数据冒烟对比
 
-窗口：epoch 802 的 slot `346464132–346464160`，4 笔 victim 交易。
+窗口：epoch 802 的 slot `346464132–346464160`，4 笔 victim 交易。当前配置 `SANDWICH_RATIO_THRESHOLD=1.1`（等价关掉 sandwich 线）、`MARINADE_STAKE_THRESHOLD=0.5`，评估口径并集 70 个（全部来自 Marinade）。
 
-| 策略 | total_sent | on_risky_leader（基于 802 ratio） | on_safe_leader | risky 占比 |
+| 策略 | total_sent | on_risky_leader（基于 802 ratio ∪ Marinade） | on_safe_leader | risky 占比 |
 |---|---|---|---|---|
 | `immediate` | 4 | 4 | 0 | **100%** |
 | `risk-aware` | 4（全部延迟） | 0 | 4 | **0%** |
 
-`risk-aware` 的 4 笔延迟交易，`delay_stats` 为 sum 12 / avg 3.0 / min 1 / max 4，即平均多等 3 个 slot 就全部避开了 802 认定的 risky leader。同一窗口下 `immediate` 100% 落在 risky leader——指标能干净地区分策略效果。
+`by_source` 细分：`immediate` 的 4 笔全部命中 `marinade`（count=4, ratio=1.0），`sandwich` 和 `both` 均为 0；`risk-aware` 三项均为 0。风险暴露从 100% 降到 0%。
 
-补充观察：这 4 笔 `risk-aware` 交易在三档评估里全部落在 `leader_observed_sandwich`（交易视角认为仍有风险）。原因是三档用的集合是"802 里观测到 victim sandwich 的 817 个 leader"，口径远宽于 ratio>0.5 的 32 个。两套指标不矛盾，只是回答不同问题——这正是保留两套的原因。
+`risk-aware` 的 4 笔延迟交易，`delay_stats` 为 sum 12 / avg 3.0 / min 1 / max 4，即平均多等 3 个 slot 就全部避开了评估口径认定的 risky leader。
+
+补充观察：这 4 笔 `risk-aware` 交易在三档评估里全部落在 `leader_observed_sandwich`（交易视角认为仍有风险）。原因是三档用的集合是"802 里观测到 victim sandwich 的 817 个 leader"，口径远宽于评估并集的 70 个。两套指标不矛盾，只是回答不同问题——这正是保留两套的原因。
 
 ### 7.3 关键发现
 

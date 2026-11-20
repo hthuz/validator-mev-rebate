@@ -106,15 +106,19 @@ MITIGATION_MAX_SKIP_SLOTS=10
 
 **1. 验证者视角的风险暴露（所有发送交易）**
 
-`GET /transactions/sent` 的 `landed_validators` 按落地 validator 聚合了**全部**发送交易（包括未延迟的），不是只有延迟的那批。sim 用 replay epoch 自身的 ratio（严格 > 阈值，NaN/缺失算安全）构造 risky validator 集合，统计：
+`GET /transactions/sent` 的 `landed_validators` 按落地 validator 聚合了**全部**发送交易（包括未延迟的），不是只有延迟的那批。sim 用 replay epoch 自身的数据构造 risky validator 集合——**与策略侧同口径：sandwich ratio 与 Marinade 质押占比取并集**，阈值分别用 `SANDWICH_RATIO_THRESHOLD` / `MARINADE_STAKE_THRESHOLD`（NaN/缺失算安全），统计：
 
 | 字段 | 含义 |
 |------|------|
 | `total_sent` | 已发送交易总数 |
-| `on_risky_leader` / `on_safe_leader` | 落地 leader 在 / 不在评估 epoch risky 集合里的笔数 |
+| `on_risky_leader` / `on_safe_leader` | 落地 leader 在 / 不在评估 epoch risky 并集里的笔数 |
 | `ratios` | 上述两项占比 |
+| `risky_validators_in_epoch` | 评估 epoch 的 risky 并集大小 |
+| `by_source` | 按来源细分的 `count` / `ratio` / `risky_validators`：`marinade` / `sandwich` / `both`。可重叠，**不是互斥划分**，之和可以不等于 `on_risky_leader` |
 
-注意这套指标与策略的历史风险判定用的是**不同 epoch**：策略看 800-801，`RiskAwareStrategy` 只躲历史高风险 leader；这套指标看 802 自身，用来检验"躲完之后还有多少落在 802 认定的 risky leader 手里"。所以两者不一致是正常的，正是留出验证要暴露的差异。
+`by_source` 只在调用方传入分列集合时出现（sim 会传），纯 `evaluate_leader_risk_exposure(report, set)` 调用保持旧输出。sim 启动时会打一段「评估口径 risky 来源」，列出 sandwich / marinade / both / union 的数量，并打印 Marinade risky validator 的完整 identity 列表。
+
+注意这套指标与策略的风险判定用的是**不同 epoch**：策略看 800-801，这套指标看 replay epoch（802）自身，用来检验"躲完之后还有多少落在评估 epoch 认定的 risky leader 手里"。两者判定维度一致但数据 epoch 不同，不一致是正常的，正是留出验证要暴露的差异。三档标签（下面第 2 项）用的是更宽的"观测到 victim sandwich 的 leader"集合，与 ratio/质押口径也不同。
 
 **2. 三档落地标签（逐笔 victim）**
 

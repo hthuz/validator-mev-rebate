@@ -22,7 +22,7 @@ from log import server_logger as logger
 from .evaluation import (
     evaluate_leader_risk_exposure,
     evaluate_victim_outcomes,
-    load_risky_validators,
+    load_risky_validators_detail,
     load_sandwich_leaders,
 )
 from .server import create_server
@@ -54,7 +54,7 @@ def run_simulation(server=None, replay=None) -> dict:
 
     slots = server.slot_manager.get_available_slots()
 
-    print("=== 风险数据概况 ===")
+    print("=== 风险数据概况（策略决策口径）===")
     risk_summary = server.get_risk_summary()
     if risk_summary.get('loaded'):
         print(
@@ -99,9 +99,27 @@ def run_simulation(server=None, replay=None) -> dict:
 
     if isinstance(replay, VictimReplaySource):
         # 验证者视角：replay epoch 自身的 risky validator 作为评估口径，
-        # 与策略决策用的历史 epoch 区分开（留出验证）。
-        risky_validators = load_risky_validators(replay.epoch)
-        exposure = evaluate_leader_risk_exposure(report, risky_validators)
+        # 与策略决策用的历史 epoch 区分开（留出验证）。评估口径同样把
+        # Marinade 质押线并入，与策略判定保持一致。
+        risky_detail = load_risky_validators_detail(replay.epoch)
+        sandwich_risky = risky_detail['sandwich_risky_validators']
+        marinade_risky = risky_detail['marinade_risky_validators']
+        print(f"=== 评估口径 risky 来源（epoch {replay.epoch}）===")
+        print(
+            f"sandwich risky: {len(sandwich_risky)}, "
+            f"marinade risky: {len(marinade_risky)}, "
+            f"both: {len(risky_detail['both_risky_validators'])}, "
+            f"union: {len(risky_detail['risky_validators'])}"
+        )
+        print("marinade risky validators:")
+        print(json.dumps(sorted(marinade_risky), ensure_ascii=False))
+
+        exposure = evaluate_leader_risk_exposure(
+            report,
+            risky_detail['risky_validators'],
+            marinade_risky=marinade_risky,
+            sandwich_risky=sandwich_risky,
+        )
         print(f"=== 落地 leader 风险暴露（基于 epoch {replay.epoch} risky validator）===")
         print(json.dumps(exposure, ensure_ascii=False, indent=2))
 
