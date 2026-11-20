@@ -23,7 +23,6 @@ CLICKHOUSE_PASSWORD = os.getenv("CLICKHOUSE_PASSWORD")
 CLICKHOUSE_DBNAME = os.getenv("CLICKHOUSE_DBNAME")
 
 # Data paths
-SANDWICH_PATH = os.getenv("SANDWICH_PATH")
 BLOCK_PATH = os.getenv("BLOCK_PATH")
 
 # Mitigation: slot 范围（inclusive，slot == block），每次推进 +1

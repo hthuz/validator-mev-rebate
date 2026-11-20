@@ -108,4 +108,5 @@ def run_simulation(server=None, replay=None) -> dict:
 
 
 if __name__ == "__main__":
+    # print("wtf")
     run_simulation()
