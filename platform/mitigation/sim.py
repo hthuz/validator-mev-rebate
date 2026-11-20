@@ -19,7 +19,12 @@ from config import (
 )
 from log import server_logger as logger
 
-from .evaluation import evaluate_victim_outcomes, load_sandwich_leaders
+from .evaluation import (
+    evaluate_leader_risk_exposure,
+    evaluate_victim_outcomes,
+    load_risky_validators,
+    load_sandwich_leaders,
+)
 from .server import create_server
 from .strategy import build_strategy_from_config
 from .user.replay import BlockReplaySource
@@ -62,27 +67,36 @@ def run_simulation(server=None, replay=None) -> dict:
     for slot in slots:
         server.set_slot(slot)
         transactions = replay.transactions_for(slot)
+
         for tx in transactions:
             server.submit_transaction(tx, slot)
             submitted.add(tx.signature)
         server.close_slot(slot)
 
-        logger.info(
-            f"slot {slot}: leader={server.slot_manager.get_leader(slot)}, "
-            f"提交交易={len(transactions)}"
-        )
+        if len(transactions) > 0:   
+            logger.info(
+                f"slot {slot}: leader={server.slot_manager.get_leader(slot)}, "
+                f"Txs Num={len(transactions)}"
+            )
 
     report = server.get_report()
     print("=== 交易处理概况 ===")
-    print(report['total_processed'])
-    print(report['immediate_count'])
-    print(report['delayed_count'])
-    print(report['delay_stats'])
+    print("total processed", report['total_processed'])
+    print("immediate count", report['immediate_count'])
+    print("delayed count", report['delayed_count'])
+    print("delay stats", report['delay_stats'])
     # print(report['slot_overview'])
     # print(json.dumps(report, ensure_ascii=False, indent=2))
 
 
     if isinstance(replay, VictimReplaySource):
+        # 验证者视角：replay epoch 自身的 risky validator 作为评估口径，
+        # 与策略决策用的历史 epoch 区分开（留出验证）。
+        risky_validators = load_risky_validators(replay.epoch)
+        exposure = evaluate_leader_risk_exposure(report, risky_validators)
+        print(f"=== 落地 leader 风险暴露（基于 epoch {replay.epoch} risky validator）===")
+        print(json.dumps(exposure, ensure_ascii=False, indent=2))
+
         leaders = load_sandwich_leaders(replay.epoch)
         evaluation = evaluate_victim_outcomes(
             report, server, replay, leaders, submitted

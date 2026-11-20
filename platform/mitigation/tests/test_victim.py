@@ -6,7 +6,12 @@ from unittest.mock import patch
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from mitigation.evaluation import evaluate_victim_outcomes, load_sandwich_leaders
+from mitigation.evaluation import (
+    evaluate_leader_risk_exposure,
+    evaluate_victim_outcomes,
+    load_risky_validators,
+    load_sandwich_leaders,
+)
 from mitigation.server import create_server
 from mitigation.slot_manager import SlotManager
 from mitigation.strategy import ImmediateStrategy
@@ -139,6 +144,42 @@ def test_three_tier_labels():
     assert result['ratios']['clean_leader'] == 0.25
 
 
+def test_load_risky_validators_threshold_and_nan():
+    ratios = {
+        'bad': 0.8,
+        'edge': 0.5,          # 等于阈值不算
+        'nan_validator': float('nan'),
+        'missing_value': 'n/a',
+        'safe': 0.2,
+    }
+    risky = load_risky_validators(
+        802, loader=lambda epoch: ratios, threshold=0.5
+    )
+    assert risky == {'bad'}
+
+
+def test_leader_risk_exposure_counts_all_sent_transactions():
+    # immediate 的 3 笔也要计入，不只是延迟的 2 笔
+    report = {
+        'total_processed': 5,
+        'landed_validators': {'bad': 2, 'safe': 2, 'unknown': 1},
+    }
+    result = evaluate_leader_risk_exposure(report, risky_validators={'bad'})
+    assert result['total_sent'] == 5
+    assert result['on_risky_leader'] == 2
+    assert result['on_safe_leader'] == 3
+    assert result['ratios']['on_risky_leader'] == 0.4
+    assert result['ratios']['on_safe_leader'] == 0.6
+
+
+def test_leader_risk_exposure_empty():
+    result = evaluate_leader_risk_exposure(
+        {'landed_validators': {}}, risky_validators={'bad'}
+    )
+    assert result['total_sent'] == 0
+    assert result['ratios']['on_risky_leader'] == 0.0
+
+
 def test_victim_tx_goes_through_existing_server():
     sm = SlotManager(leaders={100: 'a', 101: 'b'})
     server = create_server(strategy=ImmediateStrategy(), with_transport=False, slot_manager=sm)
@@ -156,5 +197,8 @@ if __name__ == "__main__":
     test_victim_replay_groups_by_slot()
     test_sandwich_leaders_loader_injection()
     test_three_tier_labels()
+    test_load_risky_validators_threshold_and_nan()
+    test_leader_risk_exposure_counts_all_sent_transactions()
+    test_leader_risk_exposure_empty()
     test_victim_tx_goes_through_existing_server()
     print("\nOK all victim tests passed")

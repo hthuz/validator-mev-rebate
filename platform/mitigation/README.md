@@ -99,7 +99,21 @@ MITIGATION_MAX_SKIP_SLOTS=10
 
 ## Victim 落地评估
 
-策略用历史 epoch（800-801）做决策，效果用**当前 replay epoch（802）自身的观测**做标签，时间上是干净的留出验证。三档标签：
+策略用历史 epoch（800-801）做决策，效果用**当前 replay epoch（802）自身的观测**做标签，时间上是干净的留出验证。有两套互补的指标：
+
+**1. 验证者视角的风险暴露（所有发送交易）**
+
+`GET /transactions/sent` 的 `landed_validators` 按落地 validator 聚合了**全部**发送交易（包括未延迟的），不是只有延迟的那批。sim 用 replay epoch 自身的 ratio（严格 > 阈值，NaN/缺失算安全）构造 risky validator 集合，统计：
+
+| 字段 | 含义 |
+|------|------|
+| `total_sent` | 已发送交易总数 |
+| `on_risky_leader` / `on_safe_leader` | 落地 leader 在 / 不在评估 epoch risky 集合里的笔数 |
+| `ratios` | 上述两项占比 |
+
+注意这套指标与策略的历史风险判定用的是**不同 epoch**：策略看 800-801，`RiskAwareStrategy` 只躲历史高风险 leader；这套指标看 802 自身，用来检验"躲完之后还有多少落在 802 认定的 risky leader 手里"。所以两者不一致是正常的，正是留出验证要暴露的差异。
+
+**2. 三档落地标签（逐笔 victim）**
 
 | 标签 | 判定 | 含义 |
 |------|------|------|
@@ -107,7 +121,7 @@ MITIGATION_MAX_SKIP_SLOTS=10
 | `leader_observed_sandwich` | 换了 slot，但落地 leader 在本 epoch 观测到过 victim sandwich | 假定仍有风险 |
 | `clean_leader` | 换了 slot，落地 leader 没有观测到 sandwich | 假定规避成功 |
 
-这是代理指标，不是反事实真值：victim 改道后不在历史区块里，无法观测搜索者是否会重新攻击它。`immediate` 策略下所有 victim 都留在原 slot，`confirmed_sandwiched` 应为 100%，可作为基线。
+两套都是代理指标，不是反事实真值：victim 改道后不在历史区块里，无法观测搜索者是否会重新攻击它。`immediate` 策略下所有 victim 都留在原 slot，`confirmed_sandwiched` 应为 100%，可作为基线。
 
 victim 按 signature 去重（同一 victim 可能出现在多个 sandwich 里）；epoch 802 实测 33,560 行 → 32,879 笔唯一 victim。
 

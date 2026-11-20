@@ -25,7 +25,6 @@ CLICKHOUSE_DBNAME = os.getenv("CLICKHOUSE_DBNAME")
 # Data paths
 SANDWICH_PATH = os.getenv("SANDWICH_PATH")
 BLOCK_PATH = os.getenv("BLOCK_PATH")
-SLOT_LEADER_PATH = os.getenv("SLOT_LEADER_PATH")
 
 # Mitigation: slot 范围（inclusive，slot == block），每次推进 +1
 MITIGATION_START_SLOT = int(os.getenv("MITIGATION_START_SLOT", "346769956"))

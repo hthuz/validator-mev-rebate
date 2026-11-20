@@ -21,6 +21,9 @@ class TransactionManager:
         self._sent_count: int = 0
         self._sent_delay_sum: int = 0
         self._sent_delayed: List[TransactionRecord] = []
+        # 所有发送交易按落地 validator 聚合计数（immediate 也计入），
+        # 用于验证者视角的风险暴露评估；不存逐笔详情。
+        self._landed_validators: Counter = Counter()
 
     def add_transaction(self, transaction: BlockTransaction) -> None:
         """添加一个交易到队列"""
@@ -32,7 +35,7 @@ class TransactionManager:
         """标记某个 slot 的用户交易已全部发送完毕（收到 end 标识）"""
         with self._lock:
             self._ended_slots.add(slot)
-            logger.info(f"收到 end 标识，slot {slot} 交易发送结束")
+            # logger.info(f"收到 end 标识，slot {slot} 交易发送结束")
 
     def is_slot_ended(self, slot: int) -> bool:
         """该 slot 是否已收到 end 标识"""
@@ -71,6 +74,7 @@ class TransactionManager:
         """累计发送计数；只有延迟交易才保留逐笔详情。"""
         with self._lock:
             self._sent_count += 1
+            self._landed_validators[record.validator] += 1
             delay = max(0, record.delay_slots)
             self._sent_delay_sum += delay
             if delay > 0:
@@ -99,6 +103,7 @@ class TransactionManager:
             delayed = self._sent_delayed.copy()
             total = self._sent_count
             delay_sum = self._sent_delay_sum
+            landed_validators = self._landed_validators.copy()
 
         delays = [r.delay_slots for r in delayed]
         delayed_count = len(delayed)
@@ -132,6 +137,10 @@ class TransactionManager:
                     for (original, target), count in sorted(move_counts.items())
                 ],
             },
+            "landed_validators": {
+                validator: count
+                for validator, count in sorted(landed_validators.items())
+            },
             "delayed_records": [
                 {
                     "signature": r.signature,
@@ -160,3 +169,4 @@ class TransactionManager:
             self._sent_count = 0
             self._sent_delay_sum = 0
             self._sent_delayed.clear()
+            self._landed_validators.clear()

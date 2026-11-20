@@ -12,7 +12,7 @@ def test_imports():
 
     # 测试config
     print("✓ 导入 config")
-    from config import SLOT_LEADER_PATH, DEBUG_MODE, SERVER_HOST, SERVER_PORT
+    from config import DEBUG_MODE, SERVER_HOST, SERVER_PORT
 
     # 测试log
     print("✓ 导入 log")

@@ -86,7 +86,6 @@ SERVER_HOST=0.0.0.0
 SERVER_PORT=5000
 ```
 
-Mitigation 的 slot leader 与 sandwich ratio 都从 ClickHouse 读取，不再需要 SLOT_LEADER_PATH 文件。
 
 ### 4. 运行模块
 

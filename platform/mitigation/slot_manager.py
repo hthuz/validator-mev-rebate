@@ -69,7 +69,7 @@ class SlotManager:
 
     def set_current_slot(self, slot: int) -> None:
         self._current_slot = slot
-        logger.info(f"当前slot更新为: {slot}")
+        # logger.info(f"Current slot: {slot}")
 
     def reset_to_first_slot(self) -> int:
         self._current_slot = self._start_slot

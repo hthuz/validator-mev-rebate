@@ -172,7 +172,6 @@ python mitigation/tests/test_server_init.py
 
 `.env` 文件必需配置：
 ```env
-SLOT_LEADER_PATH=/path/to/slot_leaders.csv
 DEBUG_MODE=true
 SERVER_HOST=0.0.0.0
 SERVER_PORT=5000
