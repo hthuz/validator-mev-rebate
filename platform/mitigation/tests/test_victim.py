@@ -12,6 +12,7 @@ from mitigation.evaluation import (
     load_risky_validators,
     load_sandwich_leaders,
 )
+from mitigation.risk_store import ValidatorRiskStore
 from mitigation.server import create_server
 from mitigation.slot_manager import SlotManager
 from mitigation.strategy import ImmediateStrategy
@@ -180,6 +181,50 @@ def test_leader_risk_exposure_empty():
     assert result['ratios']['on_risky_leader'] == 0.0
 
 
+def test_risk_store_unions_sandwich_and_marinade():
+    # sandwich: sw_only=0.8, both=0.7
+    # marinade: m_only=0.9, both=0.6, edge=0.5
+    store = ValidatorRiskStore(
+        start_epoch=800, end_epoch=800,
+        loader=lambda epoch: {'sw_only': 0.8, 'both': 0.7},
+        marinade_loader=lambda epoch: {
+            'm_only': 0.9, 'both': 0.6, 'edge': 0.5, 'nan': float('nan'),
+        },
+    )
+    # 并集判定
+    assert store.is_risky('sw_only')
+    assert store.is_risky('m_only')
+    assert store.is_risky('both')
+    assert not store.is_risky('edge'), "等于阈值不算"
+    assert not store.is_risky('nan')
+    assert not store.is_risky('unknown')
+    # 来源分列
+    assert store.sandwich_risky_validators() == ['both', 'sw_only']
+    assert store.marinade_risky_validators() == ['both', 'm_only']
+    assert store.both_risky_validators() == ['both']
+    assert store.risky_validators() == ['both', 'm_only', 'sw_only']
+    assert store.is_marinade_risky('m_only') and not store.is_sandwich_risky('m_only')
+
+    summary = store.summary()
+    assert summary['marinade_threshold'] == 0.5
+    assert summary['marinade_risky_validators'] == ['both', 'm_only']
+    assert summary['both_risky_validators'] == ['both']
+    assert summary['marinade_validator_counts'] == {800: 4}
+
+
+def test_marinade_risk_any_epoch_within_range():
+    store = ValidatorRiskStore(
+        start_epoch=800, end_epoch=801,
+        loader=lambda epoch: {},
+        marinade_loader=lambda epoch: {
+            800: {'early': 0.7},
+            801: {'late': 0.9},
+        }[epoch],
+    )
+    assert store.is_risky('early') and store.is_risky('late')
+    assert store.marinade_risky_validators() == ['early', 'late']
+
+
 def test_victim_tx_goes_through_existing_server():
     sm = SlotManager(leaders={100: 'a', 101: 'b'})
     server = create_server(strategy=ImmediateStrategy(), with_transport=False, slot_manager=sm)
@@ -200,5 +245,7 @@ if __name__ == "__main__":
     test_load_risky_validators_threshold_and_nan()
     test_leader_risk_exposure_counts_all_sent_transactions()
     test_leader_risk_exposure_empty()
+    test_risk_store_unions_sandwich_and_marinade()
+    test_marinade_risk_any_epoch_within_range()
     test_victim_tx_goes_through_existing_server()
     print("\nOK all victim tests passed")

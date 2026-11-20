@@ -55,7 +55,15 @@ def run_simulation(server=None, replay=None) -> dict:
     slots = server.slot_manager.get_available_slots()
 
     print("=== 风险数据概况 ===")
-    print(json.dumps(server.get_risk_summary(), ensure_ascii=False, indent=2))
+    risk_summary = server.get_risk_summary()
+    if risk_summary.get('loaded'):
+        print(
+            f"sandwich risky: {len(risk_summary['sandwich_risky_validators'])}, "
+            f"marinade risky: {len(risk_summary['marinade_risky_validators'])}, "
+            f"both: {len(risk_summary['both_risky_validators'])}, "
+            f"union: {len(risk_summary['risky_validators'])}"
+        )
+    # print(json.dumps(risk_summary, ensure_ascii=False, indent=2))
 
     logger.info(
         f"开始模拟: slot {slots[0]}-{slots[-1]} 共 {len(slots)} 个, "
@@ -73,11 +81,11 @@ def run_simulation(server=None, replay=None) -> dict:
             submitted.add(tx.signature)
         server.close_slot(slot)
 
-        if len(transactions) > 0:   
-            logger.info(
-                f"slot {slot}: leader={server.slot_manager.get_leader(slot)}, "
-                f"Txs Num={len(transactions)}"
-            )
+        # if len(transactions) > 0:   
+        #     logger.info(
+        #         f"slot {slot}: leader={server.slot_manager.get_leader(slot)}, "
+        #         f"Txs Num={len(transactions)}"
+        #     )
 
     report = server.get_report()
     print("=== 交易处理概况 ===")

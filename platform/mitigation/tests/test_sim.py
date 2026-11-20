@@ -95,6 +95,7 @@ def test_sim_risk_aware_skips_until_safe_leader():
             800: {'bad': 0.8},
             801: {'bad': 0.2},
         }[epoch],
+        marinade_loader=lambda epoch: {},
     )
     replay = FakeReplay({100: [_tx(100, 'sig_risk')]})
     server = _make_server(

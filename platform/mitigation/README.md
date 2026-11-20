@@ -81,21 +81,24 @@ MITIGATION_DELAY_SLOTS=1
 
 ## RiskAwareStrategy
 
-server 维护一个历史 epoch 范围（默认 800-801）内各 validator 的 sandwich ratio，ratio 计算复用 `utils.sandwich.get_sandwich_ratios()`（`SandwichSlotNum / SlotNum`）。
+server 维护一个历史 epoch 范围（默认 800-801）内各 validator 的风险数据，两条判定线**取并集**：
 
-判定规则：
-- 任意一个历史 epoch 的 ratio **严格大于** `SANDWICH_RATIO_THRESHOLD`（默认 0.5）→ 高风险。
-- NaN / 无数据视为安全。
-- 当前 leader 高风险时继续持有，遇到安全 leader 立即发送；达到 `MITIGATION_MAX_SKIP_SLOTS`（默认 10）强制发送。
+1. **sandwich ratio**：复用 `utils.sandwich.get_sandwich_ratios()`（`SandwichSlotNum / SlotNum`）。任意一个 epoch 的 ratio **严格大于** `SANDWICH_RATIO_THRESHOLD`（默认 0.5）→ 高风险。NaN / 无数据视为安全。
+2. **Marinade 质押占比**：复用 `utils.stake_reader`，占比 = `m_activated_stake / activatedStake`。任意一个 epoch 的占比 **严格大于** `MARINADE_STAKE_THRESHOLD`（默认 0.5）→ 高风险。`Reader` 的 key 是 `voteAccountPubkey`，内部映射到 `identityPubkey` 后才能与 slot leader 对上。
+
+命中并集任一条件的 leader 即被跳过：当前 leader 高风险时继续持有，遇到安全 leader 立即发送；达到 `MITIGATION_MAX_SKIP_SLOTS`（默认 10）强制发送。
 
 ```env
 SANDWICH_HISTORY_START_EPOCH=800
 SANDWICH_HISTORY_END_EPOCH=801
 SANDWICH_RATIO_THRESHOLD=0.5
+MARINADE_STAKE_THRESHOLD=0.5
 MITIGATION_MAX_SKIP_SLOTS=10
 ```
 
-启动先看风险摘要：sim 直接打印，server 模式访问 `GET /risk/summary`。加载失败只会 warning 并退化为空风险集。质押维度暂未接入。
+启动先看风险摘要：sim 直接打印，server 模式访问 `GET /risk/summary`。`risky_validators` 是并集，`sandwich_risky_validators` / `marinade_risky_validators` / `both_risky_validators` 分列来源。加载失败只会 warning 并退化为空风险集。
+
+> 实测（epoch 800-801，默认阈值 0.5）：sandwich 命中 31 个，Marinade 命中 1195 个，其中 31 个同时命中——因为 Marinade 重仓委托的 validator 与高 sandwich ratio 的 validator 高度重合，并集几乎由 Marinade 线主导。真实数据里 Marinade 质押占比 > 0.5 很常见（100% 委托的比例很高），若想收窄范围可调高 `MARINADE_STAKE_THRESHOLD`。
 
 ## Victim 落地评估
 
@@ -206,7 +209,7 @@ mitigation/
 ```
 
 ### GET /risk/summary
-历史 epoch 范围、阈值、各 epoch 加载数量、高风险 validator 列表。
+历史 epoch 范围、两个阈值（sandwich / Marinade）、各 epoch 加载数量（`validator_counts` / `marinade_validator_counts`）、高风险列表：`risky_validators`（并集）、`sandwich_risky_validators`、`marinade_risky_validators`、`both_risky_validators`（两条线都命中）。
 
 ### GET /slot/current
 当前 slot 号。

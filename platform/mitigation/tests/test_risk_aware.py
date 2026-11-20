@@ -38,7 +38,8 @@ def _make_store(calls=None):
         return data[epoch]
 
     return ValidatorRiskStore(
-        start_epoch=800, end_epoch=801, threshold=0.5, loader=loader
+        start_epoch=800, end_epoch=801, threshold=0.5, loader=loader,
+        marinade_loader=lambda epoch: {},
     )
 
 
@@ -73,6 +74,7 @@ def test_risk_store_epoch_range():
         end_epoch=801,
         threshold=0.5,
         loader=lambda epoch: {800: {"bad": 0.8}, 801: {"bad": 0.2}}[epoch],
+        marinade_loader=lambda epoch: {},
     )
     assert not only_801.is_risky("bad"), "范围外的 ratio 不应参与判定"
     print("OK risk store epoch range")

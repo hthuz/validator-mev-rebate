@@ -44,6 +44,9 @@ SANDWICH_HISTORY_START_EPOCH = int(os.getenv("SANDWICH_HISTORY_START_EPOCH", "80
 SANDWICH_HISTORY_END_EPOCH = int(os.getenv("SANDWICH_HISTORY_END_EPOCH", "801"))
 # 任意一个历史 epoch 的 ratio 严格超过该阈值，即认为该 validator 高风险
 SANDWICH_RATIO_THRESHOLD = float(os.getenv("SANDWICH_RATIO_THRESHOLD", "0.5"))
+# Marinade 质押占比阈值：epoch 范围内任意一个 epoch 的 marinade 质押 / 总激活质押
+# 严格超过该值，也认为该 validator 是高风险（与 sandwich ratio 取并集）
+MARINADE_STAKE_THRESHOLD = float(os.getenv("MARINADE_STAKE_THRESHOLD", "0.5"))
 # 连续跳过高风险 leader 的最大 slot 窗口；达到后无论 leader 风险如何都强制发送
 MITIGATION_MAX_SKIP_SLOTS = int(os.getenv("MITIGATION_MAX_SKIP_SLOTS", "10"))
 

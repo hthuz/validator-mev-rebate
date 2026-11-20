@@ -44,7 +44,8 @@ sandwich_ratio(identity) = 观测到 sandwich 的出块 slot 数 / 该验证者�
 ### 2.1 核心思路
 
 ```
-历史 epoch (800/801) ratio ──> ValidatorRiskStore ──> 判定 leader 是否 risky
+历史 epoch (800/801) ─┬─ sandwich ratio ─────┐
+                      └─ Marinade 质押占比 ─┴─> ValidatorRiskStore（并集）─> 判定 leader 是否 risky
                                                               │
 victim 交易重放 ──> slot 循环 ──> 当前 slot 的 leader ──> 分发策略决定发/等/强制发
                                                               │
@@ -66,7 +67,8 @@ victim 交易重放 ──> slot 循环 ──> 当前 slot 的 leader ──> �
 | 传输适配 | `mitigation/routes.py` | HTTP 路由 + Socket.IO 事件，只做"解包 → 调业务函数 → 包装响应" |
 | 进程内模拟 | `mitigation/sim.py` | 自己循环推进 slot，直接调业务函数，无网络、无 client 同步 |
 | 策略 | `mitigation/strategy/` | `immediate` / `delayed` / `risk-aware` 三种，由 `factory.py` 按 config 构造 |
-| 风险存储 | `mitigation/risk_store.py` | 加载历史 epoch ratio，按阈值判定 risky |
+| 风险存储 | `mitigation/risk_store.py` | 加载历史 epoch 的 sandwich ratio 与 Marinade 质押占比，两条判定线取并集判定 risky |
+| Marinade 质押 | `mitigation/marinade_store.py` | 复用 `utils.stake_reader` 加载 Marinade 质押占比，`voteAccountPubkey` → `identityPubkey` 映射 |
 | slot 管理 | `mitigation/slot_manager.py` | 从 ClickHouse `slot_leaders` 表加载 slot → leader |
 | 数据源 | `mitigation/user/replay.py`、`user/victim_source.py` | `BlockReplaySource`（全量区块交易）/ `VictimReplaySource`（victim 交易），接口一致可切换 |
 | 评估 | `mitigation/evaluation.py` | 验证者风险暴露 + 三档落地标签 |
@@ -104,20 +106,21 @@ victim 交易重放 ──> slot 循环 ──> 当前 slot 的 leader ──> �
 3. 当前 leader 无风险数据或不 risky：发送。
 4. 当前 leader risky：`(current_slot - tx.slot) >= max_skip_slots` 才发送（强制兜底），否则继续持有。
 
-风险判定规则（`ValidatorRiskStore`）：
+风险判定规则（`ValidatorRiskStore`）——两条判定线取并集：
 
-- 加载 `SANDWICH_HISTORY_START_EPOCH ~ END_EPOCH`（默认 800–801，两端 inclusive）每个 epoch 的 ratio。
-- **任意一个** epoch 的 ratio **严格 > `SANDWICH_RATIO_THRESHOLD`**（默认 0.5）即判为 risky。
-- NaN / 缺失视为安全（不判高风险）。
-- 单个 epoch 查询失败只 warning、不中断，降级为空集合。
+- 加载范围：`SANDWICH_HISTORY_START_EPOCH ~ END_EPOCH`（默认 800–801，两端 inclusive）每个 epoch 的数据。
+- **判定线 1（sandwich）**：**任意一个** epoch 的 `sandwich_ratio` 严格 > `SANDWICH_RATIO_THRESHOLD`（默认 0.5）即 risky。
+- **判定线 2（Marinade 质押）**：**任意一个** epoch 的 `m_activated_stake / activatedStake` 严格 > `MARINADE_STAKE_THRESHOLD`（默认 0.5）即 risky。质押数据复用 `utils.stake_reader.Reader`，其 dict 的 key 是 `voteAccountPubkey`，需映射到 `identityPubkey` 才能与 slot leader 对上。
+- **并集**：`is_risky()` 对两条线的并集生效；`summary()` 用 `sandwich_risky_validators` / `marinade_risky_validators` / `both_risky_validators` 分列来源，`risky_validators` 是并集。
+- NaN / 缺失视为安全；单个 epoch 加载失败只 warning、不中断，降级为空集合。
 
-> 注意"严格大于"：ratio 恰好等于 0.5 不算高风险。
+> 注意"严格大于"：恰好等于阈值不算高风险。实测两条线高度重合：sandwich 命中的 31 个 validator 全部也在 Marinade 命中集合内，并集几乎由 Marinade 线主导（1195 个）。若嫌范围过宽，调高 `MARINADE_STAKE_THRESHOLD`。
 
 ### 3.3 两层 epoch 视角（关键）
 
 | 用途 | 数据来源 | 风险集合口径 | 规模（实测） |
 |---|---|---|---|
-| **决策**（策略跳过谁） | 历史 epoch 800 / 801 | ratio 严格 > 0.5 的 validator | 800: 1095 个 validator、801: 1090 个，其中约 31 个高风险 |
+| **决策**（策略跳过谁） | 历史 epoch 800 / 801 | sandwich ratio > 0.5 **或** Marinade 质押占比 > 0.5 | sandwich 命中 31、Marinade 命中 1195、并集 1195 |
 | **评估 A**（验证者视角） | replay epoch 802 自身 | ratio 严格 > 0.5 的 validator | 1092 个有数据，其中 **32 个** risky |
 | **评估 B**（交易视角） | replay epoch 802 自身 | 观测到 victim sandwich 的 leader | **817 个** |
 
@@ -238,6 +241,7 @@ victim 改道到另一个 slot 后，**历史区块里从来没有这笔交易**
 | `MITIGATION_DELAY_SLOTS` | `1` | delayed 策略的延迟 slot 数 |
 | `SANDWICH_HISTORY_START_EPOCH` / `END_EPOCH` | `800` / `801` | 策略输入的历史 epoch 范围 |
 | `SANDWICH_RATIO_THRESHOLD` | `0.5` | ratio 严格超过即判 risky |
+| `MARINADE_STAKE_THRESHOLD` | `0.5` | Marinade 质押占比严格超过即判 risky（与 sandwich 取并集） |
 | `MITIGATION_MAX_SKIP_SLOTS` | `10` | risk-aware 连续跳过的最大 slot 窗口 |
 
 > 注意：victim 模式的 slot 范围仍由 `MITIGATION_START_SLOT/END_SLOT` 控制，**不会自动扩到整个 epoch**。要跑完整 epoch 802，需把这两个值设为 `346464000` / `346895999`。
@@ -249,10 +253,10 @@ victim 改道到另一个 slot 后，**历史区块里从来没有这笔交易**
 ### 7.1 测试
 
 ```
-python -m pytest tests/ mitigation/tests/ -q   →  53 passed
+python -m pytest tests/ mitigation/tests/ -q   →  55 passed
 ```
 
-覆盖：阈值边界（0.5 不算、0.6 算）、NaN / 缺失、epoch 范围、连续跳过、窗口强制发送、无上下文回退、sim 与 HTTP report 一致性、victim 去重、三档标签、验证者风险暴露统计等。
+覆盖：阈值边界（0.5 不算、0.6 算）、NaN / 缺失、epoch 范围、连续跳过、窗口强制发送、无上下文回退、sim 与 HTTP report 一致性、victim 去重、三档标签、验证者风险暴露统计、sandwich/Marinade 并集判定与来源分列等。
 
 > 必须用 `python -m pytest`（把项目根加入 sys.path）。裸 `pytest` 在 `tests/test_block_tx_loader.py` 的 `from type import ...` 上报 collection 错误——这是既有问题，非本次引入。
 
@@ -301,7 +305,8 @@ bash mitigation/scripts/start.sh
 
 | 方向 | 现状 | 后续 |
 |---|---|---|
-| 质押维度 | 未接入 | `utils/stake_reader.py` 有 `Validator`（`activatedStake` / `self_stake()` / `protocol_stake()` 等），但 key 是 `voteAccountPubkey`，与 sandwich ratio / leader 用的 `identity` 不同，需先做映射。方向待定：高自质押=更可信？还是高质押=更多出块机会更易被盯上？ |
+| 质押维度（Marinade） | 已接入：`m_activated_stake / activatedStake` 超阈值即 risky，与 sandwich 取并集 | 口径是单一协议占比；可扩展到 Jito / 自质押 / 多协议加权，或改用 `smap` 的协议占比口径 |
+| 质押 key 映射 | `voteAccountPubkey` → `identityPubkey`，已封装在 `marinade_store.py` | — |
 | 风险聚合 | 任一 epoch 超阈值即可 | 可考虑多 epoch 平均 / 加权 / EWMA |
 | 实时反馈 | 静态历史数据 | 当前 epoch 内的观测能否实时拿到待确认；拿到后可做在线更新 |
 | 评估口径 | 代理指标 | 严格反事实标签数据本身回答不了（见 5.3），要更准需建攻击者行为模型 |
@@ -317,7 +322,9 @@ bash mitigation/scripts/start.sh
 | `config/settings.py` | 所有策略 / 数据 / 阈值配置 |
 | `utils/sandwich.py` | `get_sandwich_info` / `get_sandwich_ratios` / `get_victim_transactions` |
 | `utils/ch.py` | ClickHouse 查询封装 |
-| `mitigation/risk_store.py` | 历史 ratio 存储与 risky 判定 |
+| `mitigation/risk_store.py` | 历史 sandwich ratio + Marinade 质押存储，并集 risky 判定 |
+| `mitigation/marinade_store.py` | Marinade 质押占比加载（`utils.stake_reader` + identity 映射） |
+| `utils/stake_reader.py` | stake 数据 Reader（本轮补了 `ValidatorMarinade` 的导出） |
 | `mitigation/slot_manager.py` | slot leader（ClickHouse `slot_leaders`） |
 | `mitigation/strategy/` | 三种策略 + `base_strategy.py`（`StrategyContext`）+ `factory.py` |
 | `mitigation/server.py` / `routes.py` | 业务 core / 传输适配 |

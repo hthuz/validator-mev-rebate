@@ -8,7 +8,7 @@ from .models import (
     SandwichTransaction,
 )
 from .staker import Stake, Staker
-from .validator import Validator, ValidatorStakewiz, ValidatorInfo
+from .validator import Validator, ValidatorStakewiz, ValidatorInfo, ValidatorMarinade
 
 __all__ = [
     'BlockTransaction',
@@ -19,6 +19,7 @@ __all__ = [
     'Validator',
     'ValidatorStakewiz',
     'ValidatorInfo',
+    'ValidatorMarinade',
     'Stake',
     'Staker',
 ]
